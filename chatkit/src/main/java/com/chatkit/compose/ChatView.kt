@@ -17,16 +17,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.imeNestedScroll
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,6 +50,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -70,6 +70,7 @@ import java.util.UUID
  * @param dateLabel Kept for API compatibility with iOS ChatKit; day pills are derived from
  * message timestamps automatically.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 public fun ChatView(
     messages: List<ChatMessage>,
@@ -109,6 +110,7 @@ public fun ChatView(
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     val recorder = remember(context) { VoiceRecorder(context.applicationContext) }
     val audioPlayer = remember(context) { AudioPlayerController(context.applicationContext) }
@@ -227,7 +229,8 @@ public fun ChatView(
 
     fun presentAttachmentPicker() {
         onAttachmentTap()
-        focusManager.clearFocus()
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
         pendingMedia.clear()
         pendingDocuments.clear()
         isAttachmentPickerPresented = true
@@ -241,7 +244,8 @@ public fun ChatView(
     }
 
     fun dismissInputPanels() {
-        focusManager.clearFocus()
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
         dismissAttachmentPicker()
     }
 
@@ -378,10 +382,11 @@ public fun ChatView(
         modifier = modifier
             .fillMaxSize()
             .background(theme.backgroundColor)
-            // Pad the whole surface once so the composer stays just above the
-            // keyboard / nav bar. Applying IME padding only on the composer while
-            // the host window pans causes the field to jump to the top.
-            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
+            // Keep the composer attached to the animated IME edge. imeNestedScroll
+            // also lets a transcript drag move/dismiss the keyboard on Android 11+.
+            .navigationBarsPadding()
+            .imePadding()
+            .imeNestedScroll(),
     ) {
         MessageList(
             messages = displayedMessages,

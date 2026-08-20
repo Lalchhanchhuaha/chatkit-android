@@ -53,7 +53,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -65,8 +64,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.util.Date
 import java.time.Instant
@@ -103,11 +102,9 @@ internal fun MessageList(
     attachmentContent: @Composable (ChatAttachment) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Match iOS InvertedMessageList:
-    // 1) Remap so index 0 is the newest row
-    // 2) Rotate the list 180° so that "top" (index 0) is the visual bottom
-    // 3) animateItem placement alone drives the slide — after rotation, rows
-    //    inserting at index 0 enter from the visual bottom and lift the stack.
+    // Keep index 0 as the newest row. reverseLayout anchors that row to the
+    // visual bottom without rotating the list (which would also invert gestures).
+    // Stable keys let animateItem lift existing rows when a new row is inserted.
     val messageSnapshot = messages.toList()
     val chronologicalItems = remember(messageSnapshot) { buildTranscriptItems(messageSnapshot) }
     val invertedItems = remember(chronologicalItems) { chronologicalItems.asReversed().toList() }
@@ -130,12 +127,13 @@ internal fun MessageList(
         trackedLastId = lastId
         if (invertedItems.isEmpty()) return@LaunchedEffect
         if (isViewingNewest || last.direction == MessageDirection.Outgoing) {
-            // Let placement animation run, then silently pin to newest if needed
-            // (same as iOS scrollToNewest after insertRows completion).
-            delay(MessagePlacementAnimation.durationMillis.toLong())
-            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
-                listState.scrollToItem(0)
-            }
+            // Stable keys keep the previously visible row anchored when index 0
+            // is inserted. Wait until that row is laid out, then scroll so the
+            // new bottom row moves into view while existing rows slide upward.
+            val renderedItemCount = invertedItems.size + if (isTyping && isViewingNewest) 1 else 0
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { it == renderedItemCount }
+            listState.animateScrollToItem(0)
             onUnreadIncomingCountChanged(0)
         } else if (last.isIncoming) {
             onUnreadIncomingCountChanged(unreadIncomingCount + 1)
@@ -153,20 +151,20 @@ internal fun MessageList(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
+            reverseLayout = true,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = maxHeight)
                 .fillMaxSize()
-                .graphicsLayer { rotationZ = 180f }
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = { onTranscriptTap() })
                 },
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
         ) {
             if (isTyping && isViewingNewest) {
                 item(key = "chatkit-typing") {
-                    InvertedListRow {
+                    AnimatedListRow {
                         TypingIndicator(typingIndicatorText, theme)
                     }
                 }
@@ -175,7 +173,7 @@ internal fun MessageList(
                 items = invertedItems,
                 key = { it.stableKey() },
             ) { item ->
-                InvertedListRow {
+                AnimatedListRow {
                     when (item) {
                         is TranscriptItem.DaySeparator -> DateSeparator(item.label, theme)
                         is TranscriptItem.Message -> MessageBubble(
@@ -212,11 +210,10 @@ private fun TranscriptItem.stableKey(): String = when (this) {
 }
 
 /**
- * Counter-rotates a row so content reads upright inside the inverted list.
  * Placement animation on [animateItem] is what creates the iOS-style slide-up.
  */
 @Composable
-private fun LazyItemScope.InvertedListRow(
+private fun LazyItemScope.AnimatedListRow(
     content: @Composable () -> Unit,
 ) {
     Box(
@@ -226,8 +223,7 @@ private fun LazyItemScope.InvertedListRow(
                 fadeInSpec = MessageInsertAnimation,
                 fadeOutSpec = tween(180, easing = FastOutSlowInEasing),
                 placementSpec = MessagePlacementAnimation,
-            )
-            .graphicsLayer { rotationZ = 180f },
+            ),
     ) {
         content()
     }
