@@ -70,5 +70,12 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Maven coordinates: `com.chatkit:chatkit:1.0.0`. Minimum Android version: API 24; `java.time` is
+Maven coordinates: `com.chatkit:chatkit:1.1.0`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
+
+## Releases
+
+| Version | Notes |
+|---------|--------|
+| 1.1.0 | IME/keyboard safe-area handling, bottom-stacked message list, insert slide-up, iOS API/UX parity (attachment panel, hold-to-record voice, day separators, unread jump) |
+| 1.0.0 | Initial publishable Compose ChatKit module |
