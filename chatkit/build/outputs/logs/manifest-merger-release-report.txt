@@ -1,0 +1,24 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml:2:1-5:12
+INJECTED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml:2:1-5:12
+	package
+		INJECTED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml:2:11-69
+uses-permission#android.permission.RECORD_AUDIO
+ADDED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml:3:5-71
+	android:name
+		ADDED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml:3:22-68
+uses-permission#android.permission.CAMERA
+ADDED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml:4:5-65
+	android:name
+		ADDED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml:4:22-62
+uses-sdk
+INJECTED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml
+INJECTED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/lushaitechnologies/Documents/workspace/Chatkitandroid/chatkit/src/main/AndroidManifest.xml

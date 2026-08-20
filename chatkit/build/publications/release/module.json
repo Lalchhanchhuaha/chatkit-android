@@ -1,0 +1,136 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.chatkit",
+    "module": "chatkit",
+    "version": "1.0.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.4.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "chatkit-1.0.0.aar",
+          "url": "chatkit-1.0.0.aar",
+          "size": 231111,
+          "sha512": "061d62d79121c3833bef29903fa0c8ec71d422239d61e4f13e5069aeb5154145306ac340584bfd9dc338e6615b827bfb9ffda26754e1c7716fd35bd56273f3b9",
+          "sha256": "2c48e65a2785bbf1ccdd8ef2dbfc761893e1ef9745db91220e248e86cd62a42f",
+          "sha1": "877af96a9653c2e5722d5d83fd2a2debb6d74df8",
+          "md5": "058bc49083d861b2920259ec534daf23"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.compose",
+          "module": "compose-bom",
+          "version": {
+            "requires": "2026.02.01"
+          },
+          "attributes": {
+            "org.gradle.category": "platform"
+          }
+        },
+        {
+          "group": "androidx.activity",
+          "module": "activity-compose",
+          "version": {
+            "requires": "1.8.0"
+          }
+        },
+        {
+          "group": "androidx.compose.material3",
+          "module": "material3"
+        },
+        {
+          "group": "androidx.compose.ui",
+          "module": "ui"
+        },
+        {
+          "group": "androidx.compose.ui",
+          "module": "ui-graphics"
+        },
+        {
+          "group": "androidx.compose.ui",
+          "module": "ui-tooling-preview"
+        },
+        {
+          "group": "androidx.core",
+          "module": "core-ktx",
+          "version": {
+            "requires": "1.10.1"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "chatkit-1.0.0.aar",
+          "url": "chatkit-1.0.0.aar",
+          "size": 231111,
+          "sha512": "061d62d79121c3833bef29903fa0c8ec71d422239d61e4f13e5069aeb5154145306ac340584bfd9dc338e6615b827bfb9ffda26754e1c7716fd35bd56273f3b9",
+          "sha256": "2c48e65a2785bbf1ccdd8ef2dbfc761893e1ef9745db91220e248e86cd62a42f",
+          "sha1": "877af96a9653c2e5722d5d83fd2a2debb6d74df8",
+          "md5": "058bc49083d861b2920259ec534daf23"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "chatkit-1.0.0-sources.jar",
+          "url": "chatkit-1.0.0-sources.jar",
+          "size": 21932,
+          "sha512": "f99466e408fe8a66b72344db0fb017f595604dc46a1b458f704ffaea1f13626d74d70bd65b01c4b24b58e8ccdc16fdc6cc7fb228f221c396a3794c3db30d8172",
+          "sha256": "e6dc8f2b76704ff13caaeef795bc23819142c0870298bb9f4869b9ccea50b7d9",
+          "sha1": "7e5c142c35e248bfd1d473081bf19109fb1bf03d",
+          "md5": "df5d7c9cdb46f4b29beca495d1df192d"
+        }
+      ]
+    }
+  ]
+}
