@@ -3,7 +3,7 @@
   "component": {
     "group": "com.chatkit",
     "module": "chatkit",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "attributes": {
       "org.gradle.status": "release"
     }
@@ -33,13 +33,13 @@
       ],
       "files": [
         {
-          "name": "chatkit-1.0.0.aar",
-          "url": "chatkit-1.0.0.aar",
-          "size": 231111,
-          "sha512": "061d62d79121c3833bef29903fa0c8ec71d422239d61e4f13e5069aeb5154145306ac340584bfd9dc338e6615b827bfb9ffda26754e1c7716fd35bd56273f3b9",
-          "sha256": "2c48e65a2785bbf1ccdd8ef2dbfc761893e1ef9745db91220e248e86cd62a42f",
-          "sha1": "877af96a9653c2e5722d5d83fd2a2debb6d74df8",
-          "md5": "058bc49083d861b2920259ec534daf23"
+          "name": "chatkit-1.1.0.aar",
+          "url": "chatkit-1.1.0.aar",
+          "size": 232540,
+          "sha512": "85313871ccc2879361d65a8c1161cdc600c900db521c1e81e1eae1e4f90be917c1e0dc412a741606a414827ba46f4f7fff298e139f3c6cec8e7171c391ac05c5",
+          "sha256": "9b2caa12807218f12a575439b4ac9421c6ab65a949c0f39af51870e782c44f37",
+          "sha1": "4be52d8c5700986e60be52795b63cf688c181bf8",
+          "md5": "687083d1a6a514d359d4a4c4f65e5f19"
         }
       ]
     },
@@ -102,13 +102,13 @@
       ],
       "files": [
         {
-          "name": "chatkit-1.0.0.aar",
-          "url": "chatkit-1.0.0.aar",
-          "size": 231111,
-          "sha512": "061d62d79121c3833bef29903fa0c8ec71d422239d61e4f13e5069aeb5154145306ac340584bfd9dc338e6615b827bfb9ffda26754e1c7716fd35bd56273f3b9",
-          "sha256": "2c48e65a2785bbf1ccdd8ef2dbfc761893e1ef9745db91220e248e86cd62a42f",
-          "sha1": "877af96a9653c2e5722d5d83fd2a2debb6d74df8",
-          "md5": "058bc49083d861b2920259ec534daf23"
+          "name": "chatkit-1.1.0.aar",
+          "url": "chatkit-1.1.0.aar",
+          "size": 232540,
+          "sha512": "85313871ccc2879361d65a8c1161cdc600c900db521c1e81e1eae1e4f90be917c1e0dc412a741606a414827ba46f4f7fff298e139f3c6cec8e7171c391ac05c5",
+          "sha256": "9b2caa12807218f12a575439b4ac9421c6ab65a949c0f39af51870e782c44f37",
+          "sha1": "4be52d8c5700986e60be52795b63cf688c181bf8",
+          "md5": "687083d1a6a514d359d4a4c4f65e5f19"
         }
       ]
     },
@@ -122,13 +122,13 @@
       },
       "files": [
         {
-          "name": "chatkit-1.0.0-sources.jar",
-          "url": "chatkit-1.0.0-sources.jar",
-          "size": 21932,
-          "sha512": "f99466e408fe8a66b72344db0fb017f595604dc46a1b458f704ffaea1f13626d74d70bd65b01c4b24b58e8ccdc16fdc6cc7fb228f221c396a3794c3db30d8172",
-          "sha256": "e6dc8f2b76704ff13caaeef795bc23819142c0870298bb9f4869b9ccea50b7d9",
-          "sha1": "7e5c142c35e248bfd1d473081bf19109fb1bf03d",
-          "md5": "df5d7c9cdb46f4b29beca495d1df192d"
+          "name": "chatkit-1.1.0-sources.jar",
+          "url": "chatkit-1.1.0-sources.jar",
+          "size": 21910,
+          "sha512": "512f82ed33e8318c66ba2f577907ae2f471365db741f739da6b0ab00be4917feb9a944a3fa4dfb4ec7af8a25a72262e73c1af91ede60b63c70676a4058f1337f",
+          "sha256": "060d88321db55f715e07502877f733faaef5dd88e9ab254cd5eb4b8f02332bb0",
+          "sha1": "4239308e569dd54e0a7844215a72e7bd7fe23d50",
+          "md5": "943ca5793334e23534f06602423b6c94"
         }
       ]
     }
