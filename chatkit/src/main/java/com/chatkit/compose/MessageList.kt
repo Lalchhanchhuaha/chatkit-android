@@ -78,11 +78,18 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
@@ -339,7 +346,8 @@ internal fun MessageBubble(
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
 ) {
     val incoming = message.isIncoming
-    val bubbleShape = messageBubbleShape(incoming, theme.bubbleCornerRadius)
+    val corner = if (theme.bubbleCornerRadius == Dp.Unspecified) 14.dp else theme.bubbleCornerRadius
+    val bubbleShape = messageBubbleShape(incoming, corner)
     var showActions by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
     var editedText by remember(message.id, message.text) { mutableStateOf(message.text) }
@@ -348,6 +356,20 @@ internal fun MessageBubble(
     val replyThreshold = with(LocalDensity.current) { 52.dp.toPx() }
     var swipeTarget by remember(message.id) { mutableFloatStateOf(0f) }
     val swipeOffset by animateFloatAsState(swipeTarget, tween(120), label = "reply-swipe")
+    val hasMedia = message.attachments.any { it.isImage || it.isVideo || it.isAudio }
+    val sideInset = if (hasMedia) 20.dp else 56.dp
+    val trimmedText = message.text.trim()
+    val hasText = trimmedText.isNotEmpty()
+    val timeText = remember(message.timestampMillis) {
+        java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+            .format(java.util.Date(message.timestampMillis))
+    }
+    val showsDelivery = !incoming &&
+        theme.showsDeliveryStatus &&
+        message.deliveryStatus != DeliveryStatus.None
+    val timestampColor = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor
+    val textColor = if (incoming) theme.incomingTextColor else theme.outgoingTextColor
+
     val swipeModifier = if (onReply == null) {
         Modifier
     } else {
@@ -362,7 +384,9 @@ internal fun MessageBubble(
             },
         )
     }
-    Box(Modifier.fillMaxWidth()) {
+
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val maxBubble = ChatBubbleMetrics.maxBubbleWidth(maxWidth, theme.messageMaximumWidth)
         if (swipeOffset > 4f) {
             Text(
                 text = "↩",
@@ -378,134 +402,132 @@ internal fun MessageBubble(
                 .then(swipeModifier),
             horizontalArrangement = if (incoming) Arrangement.Start else Arrangement.End,
         ) {
-        Column(horizontalAlignment = if (incoming) Alignment.Start else Alignment.End) {
-            if (showsSender && incoming && !message.senderName.isNullOrBlank()) {
-                Text(
-                    text = message.senderName,
-                    color = theme.incomingTimestampColor,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
-                )
-            }
+            if (!incoming) Spacer(Modifier.width(sideInset))
             Column(
-                modifier = Modifier
-                .widthIn(max = if (theme.messageMaximumWidth == Dp.Unspecified) 280.dp else theme.messageMaximumWidth)
-                .background(
-                    if (incoming) theme.incomingBubbleColor else theme.outgoingBubbleColor,
-                    bubbleShape,
-                )
-                .then(
-                    if (incoming) {
-                        Modifier.border(0.5.dp, theme.incomingBubbleBorderColor, bubbleShape)
-                    } else {
-                        Modifier
-                    },
-                )
-                .pointerInput(message.id, canEdit, onDeleteMessage, onReply) {
-                    detectTapGestures(
-                        onTap = { if (!incoming && message.deliveryStatus == DeliveryStatus.Failed) onRetry() },
-                        onLongPress = {
-                            if (onReply != null || canEdit || onDeleteMessage != null) {
-                                showActions = true
-                            }
-                        },
-                    )
-                }
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalAlignment = if (incoming) Alignment.Start else Alignment.End,
+                modifier = Modifier.weight(1f, fill = false),
             ) {
-            if (message.replyToMessageId != null) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.07f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                ) {
+                if (showsSender && incoming && !message.senderName.isNullOrBlank()) {
                     Text(
-                        text = message.replyToSenderName?.takeIf { it.isNotBlank() } ?: "Reply",
+                        text = message.senderName,
                         color = theme.accentColor,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 11.sp,
-                    )
-                    Text(
-                        text = message.replyToMessageText?.ifBlank { "Attachment" } ?: "Message",
-                        color = if (incoming) theme.incomingTextColor else theme.outgoingTextColor,
                         fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 10.dp, bottom = 5.dp, top = 2.dp),
                     )
                 }
-                Spacer(Modifier.height(6.dp))
-            }
-            message.attachments.forEach { attachment ->
-                attachmentContent(attachment)
-                if (message.text.isNotBlank()) Spacer(Modifier.height(6.dp))
-            }
-            // Message text
-            if (message.text.isNotBlank()) {
-                Text(
-                    message.text,
-                    color = if (incoming) theme.incomingTextColor else theme.outgoingTextColor,
-                    fontSize = 16.sp,
-                    lineHeight = 22.sp,
-                )
-            }
-            // WhatsApp-style timestamp row: right-aligned below message text
-            Row(
-                modifier = Modifier
-                    .align(Alignment.End)
-                    .padding(top = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.End,
-            ) {
-                val timeText = remember(message.timestampMillis) {
-                    java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-                        .format(java.util.Date(message.timestampMillis))
-                }
-                Text(
-                    timeText,
-                    color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor,
-                    fontSize = 11.sp,
-                )
-                if (message.isEdited) {
-                    Text(
-                        " · edited",
-                        color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor,
-                        fontSize = 11.sp,
-                    )
-                }
-                if (!incoming && theme.showsDeliveryStatus) {
-                    Spacer(Modifier.size(width = 3.dp, height = 1.dp))
-                    if (deliveryStatusContent != null) {
-                        deliveryStatusContent(message.deliveryStatus, onRetry)
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = maxBubble)
+                        .wrapContentWidth(if (incoming) Alignment.Start else Alignment.End)
+                        .background(
+                            if (incoming) theme.incomingBubbleColor else theme.outgoingBubbleColor,
+                            bubbleShape,
+                        )
+                        .then(
+                            if (incoming) {
+                                Modifier.border(1.dp, theme.incomingBubbleBorderColor, bubbleShape)
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .pointerInput(message.id, canEdit, onDeleteMessage, onReply) {
+                            detectTapGestures(
+                                onTap = {
+                                    if (!incoming && message.deliveryStatus == DeliveryStatus.Failed) onRetry()
+                                },
+                                onLongPress = {
+                                    if (onReply != null || canEdit || onDeleteMessage != null) {
+                                        showActions = true
+                                    }
+                                },
+                            )
+                        }
+                        .padding(
+                            start = 10.dp,
+                            end = 10.dp,
+                            top = if (hasMedia && !hasText) 4.dp else 8.dp,
+                            bottom = 6.dp,
+                        ),
+                ) {
+                    if (message.replyToMessageId != null) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.Black.copy(alpha = 0.07f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                text = message.replyToSenderName?.takeIf { it.isNotBlank() } ?: "Reply",
+                                color = theme.accentColor,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 11.sp,
+                            )
+                            Text(
+                                text = message.replyToMessageText?.ifBlank { "Attachment" } ?: "Message",
+                                color = textColor,
+                                fontSize = 12.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    message.attachments.forEach { attachment ->
+                        attachmentContent(attachment)
+                        if (hasText) Spacer(Modifier.height(6.dp))
+                    }
+                    if (hasText) {
+                        InlineTimestampCaption(
+                            text = trimmedText,
+                            timeText = timeText,
+                            isEdited = message.isEdited,
+                            showsDelivery = showsDelivery,
+                            deliveryStatus = message.deliveryStatus,
+                            textColor = textColor,
+                            timestampColor = timestampColor,
+                            theme = theme,
+                            maxBubbleWidth = maxBubble,
+                            onRetry = onRetry,
+                            deliveryStatusContent = deliveryStatusContent,
+                        )
                     } else {
-                        DeliveryStatus(message.deliveryStatus, theme, onRetry)
+                        MessageTimestampFooter(
+                            timeText = timeText,
+                            isEdited = message.isEdited,
+                            showsDelivery = showsDelivery,
+                            deliveryStatus = message.deliveryStatus,
+                            timestampColor = timestampColor,
+                            theme = theme,
+                            onRetry = onRetry,
+                            deliveryStatusContent = deliveryStatusContent,
+                            modifier = Modifier.align(Alignment.End),
+                        )
+                    }
+                    DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
+                        if (onReply != null) {
+                            DropdownMenuItem(
+                                text = { Text("Reply") },
+                                onClick = { showActions = false; onReply() },
+                            )
+                        }
+                        if (canEdit) {
+                            DropdownMenuItem(
+                                text = { Text("Edit") },
+                                onClick = { showActions = false; showEditDialog = true },
+                            )
+                        }
+                        if (onDeleteMessage != null) {
+                            DropdownMenuItem(
+                                text = { Text("Delete") },
+                                onClick = { showActions = false; onDeleteMessage(message.id) },
+                            )
+                        }
                     }
                 }
             }
-            DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
-                if (onReply != null) {
-                    DropdownMenuItem(
-                        text = { Text("Reply") },
-                        onClick = { showActions = false; onReply() },
-                    )
-                }
-                if (canEdit) {
-                    DropdownMenuItem(
-                        text = { Text("Edit") },
-                        onClick = { showActions = false; showEditDialog = true },
-                    )
-                }
-                if (onDeleteMessage != null) {
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        onClick = { showActions = false; onDeleteMessage(message.id) },
-                    )
-                }
-            }
+            if (incoming) Spacer(Modifier.width(sideInset))
         }
-    }
-    }
     }
     if (showEditDialog) {
         AlertDialog(
@@ -523,6 +545,159 @@ internal fun MessageBubble(
             },
             dismissButton = { TextButton(onClick = { showEditDialog = false }) { Text("Cancel") } },
         )
+    }
+}
+
+/**
+ * iOS/WhatsApp-style caption: message body with a clear footer spacer and the real
+ * timestamp/ticks overlaid on the last line (or a dedicated footer line when needed).
+ */
+@Composable
+private fun InlineTimestampCaption(
+    text: String,
+    timeText: String,
+    isEdited: Boolean,
+    showsDelivery: Boolean,
+    deliveryStatus: DeliveryStatus,
+    textColor: Color,
+    timestampColor: Color,
+    theme: ChatTheme,
+    maxBubbleWidth: Dp,
+    onRetry: () -> Unit,
+    deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)?,
+) {
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    val messageStyle = androidx.compose.ui.text.TextStyle(
+        color = textColor,
+        fontSize = 16.sp,
+        lineHeight = 22.sp,
+    )
+    val footerStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp)
+    val horizontalPadding = 20.dp // 10 + 10 bubble padding
+    val maxTextWidth = (maxBubbleWidth - horizontalPadding).coerceAtLeast(40.dp)
+    val maxTextWidthPx = with(density) { maxTextWidth.toPx() }
+
+    val footerWidthPx = remember(timeText, isEdited, showsDelivery, deliveryStatus, density) {
+        with(density) {
+            var width = textMeasurer.measure(timeText, footerStyle).size.width.toFloat()
+            if (isEdited) {
+                width += textMeasurer.measure("Edited", footerStyle).size.width + 4.dp.toPx()
+            }
+            if (showsDelivery) {
+                width += when (deliveryStatus) {
+                    DeliveryStatus.Delivered, DeliveryStatus.Read -> 18.dp.toPx()
+                    DeliveryStatus.Failed -> 16.dp.toPx()
+                    else -> 14.dp.toPx()
+                } + 4.dp.toPx()
+            }
+            width + 6.dp.toPx()
+        }
+    }
+
+    val layout = remember(text, maxTextWidthPx, footerWidthPx, textMeasurer, density) {
+        val unconstrained = textMeasurer.measure(
+            text = text,
+            style = messageStyle,
+            softWrap = false,
+            maxLines = 1,
+            constraints = Constraints(maxWidth = Constraints.Infinity),
+        )
+        val wrapped = textMeasurer.measure(
+            text = text,
+            style = messageStyle,
+            softWrap = true,
+            constraints = Constraints(maxWidth = maxTextWidthPx.toInt().coerceAtLeast(1)),
+        )
+        val lastLine = (wrapped.lineCount - 1).coerceAtLeast(0)
+        val lastLineWidth = if (wrapped.lineCount > 0) {
+            wrapped.getLineRight(lastLine) - wrapped.getLineLeft(lastLine)
+        } else {
+            0f
+        }
+        WhatsAppBubbleTextLayoutCalculator.measure(
+            naturalTextWidthPx = unconstrained.size.width.toFloat(),
+            wrappedTextWidthPx = wrapped.size.width.toFloat(),
+            lastLineWidthPx = lastLineWidth,
+            textHeightPx = wrapped.size.height.toFloat(),
+            lineHeightPx = with(density) { 22.sp.toPx() },
+            maxTextWidthPx = maxTextWidthPx,
+            footerWidthPx = footerWidthPx,
+        )
+    }
+
+    val figureWidthPx = remember(textMeasurer) {
+        textMeasurer.measure("\u2007", footerStyle).size.width.toFloat().coerceAtLeast(1f)
+    }
+    val spacer = remember(layout.spacerWidthPx, figureWidthPx, layout.footerOnNewLine) {
+        val run = WhatsAppBubbleTextLayoutCalculator.footerSpacerString(layout.spacerWidthPx, figureWidthPx)
+        if (layout.footerOnNewLine) "\n$run" else run
+    }
+    // Width of the text area only; bubble padding is applied by the parent.
+    val contentWidth = with(density) {
+        (layout.contentWidthPx + 4.dp.toPx())
+            .toDp()
+            .coerceAtMost(maxTextWidth)
+            .coerceAtLeast(52.dp)
+    }
+
+    Box(
+        modifier = Modifier
+            .widthIn(max = maxTextWidth)
+            .width(contentWidth),
+    ) {
+        Text(
+            text = buildAnnotatedString {
+                append(text)
+                withStyle(SpanStyle(color = Color.Transparent, fontSize = 11.sp)) {
+                    append(spacer)
+                }
+            },
+            style = messageStyle,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        MessageTimestampFooter(
+            timeText = timeText,
+            isEdited = isEdited,
+            showsDelivery = showsDelivery,
+            deliveryStatus = deliveryStatus,
+            timestampColor = timestampColor,
+            theme = theme,
+            onRetry = onRetry,
+            deliveryStatusContent = deliveryStatusContent,
+            modifier = Modifier.align(Alignment.BottomEnd),
+        )
+    }
+}
+
+@Composable
+private fun MessageTimestampFooter(
+    timeText: String,
+    isEdited: Boolean,
+    showsDelivery: Boolean,
+    deliveryStatus: DeliveryStatus,
+    timestampColor: Color,
+    theme: ChatTheme,
+    onRetry: () -> Unit,
+    deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (isEdited) {
+            Text("Edited", color = timestampColor, fontSize = 11.sp)
+        }
+        Text(timeText, color = timestampColor, fontSize = 11.sp)
+        if (showsDelivery) {
+            if (deliveryStatusContent != null) {
+                deliveryStatusContent(deliveryStatus, onRetry)
+            } else {
+                DeliveryStatus(deliveryStatus, theme, onRetry)
+            }
+        }
     }
 }
 

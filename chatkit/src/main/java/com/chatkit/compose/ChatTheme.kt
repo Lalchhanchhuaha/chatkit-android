@@ -20,8 +20,9 @@ public data class ChatTheme(
     val outgoingTimestampColor: Color = Color(0xFFB8C5D6),
     val dateSeparatorBackground: Color = Color(0xFFE1E8ED),
     val dateSeparatorTextColor: Color = Color(0xFF667781),
-    val bubbleCornerRadius: Dp = 16.dp,
-    val messageMaximumWidth: Dp = 280.dp,
+    val bubbleCornerRadius: Dp = 14.dp,
+    /** Theme cap; [Dp.Unspecified] uses screen-ratio sizing like iOS ChatKit. */
+    val messageMaximumWidth: Dp = Dp.Unspecified,
     val showsDeliveryStatus: Boolean = false,
     val attachmentPanelBackgroundColor: Color = Color.White,
     val attachmentTileBackgroundColor: Color = Color(0xFFF2F2F7),

@@ -61,7 +61,8 @@ public data class ChatColors(
 /** Layout dimensions for message bubbles. */
 @Immutable
 public data class ChatDimensions(
-    public val bubbleCornerRadius: Dp = 16.dp,
+    public val bubbleCornerRadius: Dp = 14.dp,
+    /** Theme cap; [Dp.Unspecified] uses ~78% of container width (iOS ChatKit). */
     public val maximumBubbleWidth: Dp = Dp.Unspecified,
 )
 
