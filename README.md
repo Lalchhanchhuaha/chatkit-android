@@ -39,11 +39,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.2.0")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.3.0")
 }
 ```
 
-For development snapshots, replace `v1.2.0` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.3.0` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -118,13 +118,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.2.0`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.3.0`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.3.0 | Smart VC-style message detail UI, tailed bubbles, polished composer, and stable IME transitions |
 | 1.2.0 | State-driven screen, pagination and swipe-to-reply |
 | 1.1.0 | IME/keyboard safe-area handling, bottom-stacked message list, insert slide-up, iOS API/UX parity (attachment panel, hold-to-record voice, day separators, unread jump) |
 | 1.0.0 | Initial publishable Compose ChatKit module |

@@ -17,6 +17,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.imeAnimationSource
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -189,8 +193,13 @@ internal fun MessageList(
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = { onTranscriptTap() })
                 },
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 16.dp,
+                bottom = 12.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
         ) {
             if (isTyping && isViewingNewest) {
                 item(key = "chatkit-typing") {
@@ -229,8 +238,8 @@ internal fun MessageList(
                 count = unreadIncomingCount,
                 theme = theme,
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 12.dp),
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 8.dp),
                 onClick = onJumpToNewest,
             )
         }
@@ -249,17 +258,29 @@ private fun TranscriptItem.stableKey(): String = when (this) {
 private fun LazyItemScope.AnimatedListRow(
     content: @Composable () -> Unit,
 ) {
+    val isImeAnimating = isImeAnimating()
     Box(
         Modifier
             .fillMaxWidth()
             .animateItem(
                 fadeInSpec = MessageInsertAnimation,
                 fadeOutSpec = tween(180, easing = FastOutSlowInEasing),
-                placementSpec = MessagePlacementAnimation,
+                // A changing IME viewport already moves every row. Running a placement
+                // animation at the same time creates the familiar message-list "jump".
+                placementSpec = if (isImeAnimating) null else MessagePlacementAnimation,
             ),
     ) {
         content()
     }
+}
+
+/** True while Compose's IME animation source and target insets differ. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun isImeAnimating(): Boolean {
+    val density = LocalDensity.current
+    return WindowInsets.imeAnimationSource.getBottom(density) !=
+        WindowInsets.imeAnimationTarget.getBottom(density)
 }
 
 @Composable
@@ -269,22 +290,25 @@ internal fun UnreadJumpButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val label = if (count == 1) "New message" else "$count new messages"
     Row(
         modifier = modifier
-            .shadow(5.dp, RoundedCornerShape(50))
-            .clip(RoundedCornerShape(50))
+            .shadow(4.dp, RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(theme.accentColor)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp)
-            .height(32.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
             .semantics {
-                contentDescription = "$count new message${if (count == 1) "" else "s"}"
+                contentDescription = label
             },
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Text("↓", color = theme.accentContentColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-        Text("$count", color = theme.accentContentColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        Text(
+            text = label,
+            color = theme.accentContentColor,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 13.sp,
+        )
     }
 }
 
@@ -301,6 +325,7 @@ internal fun MessageBubble(
     attachmentContent: @Composable (ChatAttachment) -> Unit,
 ) {
     val incoming = message.isIncoming
+    val bubbleShape = messageBubbleShape(incoming, theme.bubbleCornerRadius)
     val context = LocalContext.current
     var showActions by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
@@ -340,7 +365,16 @@ internal fun MessageBubble(
                 .then(swipeModifier),
             horizontalArrangement = if (incoming) Arrangement.Start else Arrangement.End,
         ) {
-        Box {
+        Column(horizontalAlignment = if (incoming) Alignment.Start else Alignment.End) {
+            if (showsSender && incoming && !message.senderName.isNullOrBlank()) {
+                Text(
+                    text = message.senderName,
+                    color = theme.incomingTimestampColor,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
+                )
+            }
             Column(
                 modifier = Modifier
                 .then(
@@ -349,11 +383,11 @@ internal fun MessageBubble(
                 )
                 .background(
                     if (incoming) theme.incomingBubbleColor else theme.outgoingBubbleColor,
-                    RoundedCornerShape(theme.bubbleCornerRadius),
+                    bubbleShape,
                 )
                 .then(
                     if (incoming) {
-                        Modifier.border(0.5.dp, theme.incomingBubbleBorderColor, RoundedCornerShape(theme.bubbleCornerRadius))
+                        Modifier.border(0.5.dp, theme.incomingBubbleBorderColor, bubbleShape)
                     } else {
                         Modifier
                     },
@@ -368,7 +402,7 @@ internal fun MessageBubble(
                         },
                     )
                 }
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
             if (message.replyToMessageId != null) {
                 Column(
@@ -393,10 +427,6 @@ internal fun MessageBubble(
                 }
                 Spacer(Modifier.height(6.dp))
             }
-            if (showsSender && incoming && !message.senderName.isNullOrBlank()) {
-                Text(message.senderName, color = theme.accentColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                Spacer(Modifier.height(2.dp))
-            }
             message.attachments.forEach { attachment ->
                 attachmentContent(attachment)
                 if (message.text.isNotBlank()) Spacer(Modifier.height(6.dp))
@@ -406,6 +436,7 @@ internal fun MessageBubble(
                     message.text,
                     color = if (incoming) theme.incomingTextColor else theme.outgoingTextColor,
                     fontSize = 16.sp,
+                    lineHeight = 22.sp,
                 )
             }
             Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
@@ -466,6 +497,15 @@ internal fun MessageBubble(
         )
     }
 }
+
+/** Smart VC / WhatsApp-style bubble with one sharp tail corner. */
+private fun messageBubbleShape(incoming: Boolean, radius: Dp): RoundedCornerShape =
+    RoundedCornerShape(
+        topStart = radius,
+        topEnd = radius,
+        bottomStart = if (incoming) 0.dp else radius,
+        bottomEnd = if (incoming) radius else 0.dp,
+    )
 
 @Composable
 internal fun DefaultAttachment(
@@ -582,13 +622,13 @@ private fun DeliveryStatus(status: DeliveryStatus, theme: ChatTheme, onRetry: ()
 
 @Composable
 internal fun DateSeparator(label: String, theme: ChatTheme) {
-    Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Text(
             label,
             color = theme.dateSeparatorTextColor,
             fontSize = 12.sp,
             modifier = Modifier
-                .background(theme.dateSeparatorBackground, RoundedCornerShape(20.dp))
+                .background(theme.dateSeparatorBackground, RoundedCornerShape(8.dp))
                 .padding(horizontal = 12.dp, vertical = 5.dp),
         )
     }
