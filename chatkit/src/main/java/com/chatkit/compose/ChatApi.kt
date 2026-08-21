@@ -54,12 +54,14 @@ public data class ChatColors(
     public val readReceipt: Color,
     public val typingIndicatorBubble: Color,
     public val typingIndicatorContent: Color,
+    public val composerButtonBackground: Color = Color(0xFFEFF3F6),
+    public val composerIcon: Color = Color(0xFF5F7186),
 )
 
 /** Layout dimensions for message bubbles. */
 @Immutable
 public data class ChatDimensions(
-    public val bubbleCornerRadius: Dp = 14.dp,
+    public val bubbleCornerRadius: Dp = 16.dp,
     public val maximumBubbleWidth: Dp = Dp.Unspecified,
 )
 
@@ -141,7 +143,8 @@ private fun ChatTheme.toColors(): ChatColors = ChatColors(
     outgoingTextColor, incomingTimestampColor, outgoingTimestampColor, dateSeparatorBackground,
     dateSeparatorTextColor, attachmentPanelBackgroundColor, attachmentTileBackgroundColor,
     thumbnailPlaceholderBackgroundColor, incomingBubbleBorderColor, readReceiptColor,
-    typingIndicatorBubbleColor, typingIndicatorTextColor,
+    typingIndicatorBubbleColor, typingIndicatorTextColor, composerButtonBackgroundColor,
+    composerIconColor,
 )
 
 private fun ChatColors.toTheme(dimensions: ChatDimensions, showDeliveryStatus: Boolean): ChatTheme =
@@ -167,6 +170,8 @@ private fun ChatColors.toTheme(dimensions: ChatDimensions, showDeliveryStatus: B
         readReceiptColor = readReceipt,
         typingIndicatorBubbleColor = typingIndicatorBubble,
         typingIndicatorTextColor = typingIndicatorContent,
+        composerButtonBackgroundColor = composerButtonBackground,
+        composerIconColor = composerIcon,
         bubbleCornerRadius = dimensions.bubbleCornerRadius,
         messageMaximumWidth = dimensions.maximumBubbleWidth,
         showsDeliveryStatus = showDeliveryStatus,

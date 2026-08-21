@@ -7,6 +7,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,18 +22,26 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imeNestedScroll
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +61,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -58,6 +71,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -412,12 +426,7 @@ public fun ChatView(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(theme.backgroundColor)
-            // Keep the composer attached to the animated IME edge. imeNestedScroll
-            // also lets a transcript drag move/dismiss the keyboard on Android 11+.
-            .navigationBarsPadding()
-            .imePadding()
-            .imeNestedScroll(),
+            .background(theme.backgroundColor),
     ) {
         MessageList(
             messages = displayedMessages,
@@ -451,10 +460,22 @@ public fun ChatView(
             modifier = Modifier.weight(1f).fillMaxWidth(),
         )
 
+        // Smart VC detail layout: only the natural-height footer receives bottom insets.
+        // The weighted transcript yields space as the keyboard or attachment panel grows.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding(),
+        ) {
         if (showsComposer) Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(theme.composerBarColor),
+                .background(theme.composerBarColor)
+                .animateContentSize(
+                    animationSpec = tween(180, easing = FastOutSlowInEasing),
+                    alignment = Alignment.BottomCenter,
+                ),
         ) {
             HorizontalDivider(color = Color.Black.copy(alpha = 0.08f))
             replyingTo?.let { message ->
@@ -479,45 +500,78 @@ public fun ChatView(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    ComposerButton("+", enabled = !isVoiceRecorderActive, theme = theme) {
+                    ComposerButton(
+                        icon = if (isAttachmentPickerPresented) Icons.Default.Close else Icons.Default.Add,
+                        contentDescription = if (isAttachmentPickerPresented) {
+                            "Close attachment picker"
+                        } else {
+                            "Add attachment"
+                        },
+                        enabled = !isVoiceRecorderActive,
+                        theme = theme,
+                    ) {
                         if (isAttachmentPickerPresented) {
                             dismissAttachmentPicker()
                         } else {
                             presentAttachmentPicker()
                         }
                     }
-                    BasicTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
+                    Spacer(Modifier.width(10.dp))
+                    Box(
                         modifier = Modifier
                             .weight(1f)
-                            .focusRequester(composerFocusRequester)
-                            .border(0.5.dp, theme.composerFieldBorderColor, RoundedCornerShape(18.dp))
-                            .background(theme.composerFieldBackground, RoundedCornerShape(18.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                            .onFocusChanged { focus ->
-                                if (focus.isFocused && isAttachmentPickerPresented) {
-                                    isAttachmentPickerPresented = false
+                            .heightIn(min = 44.dp, max = 120.dp)
+                            .clip(ComposerFieldShape)
+                            .border(1.dp, theme.composerFieldBorderColor, ComposerFieldShape)
+                            .background(theme.composerFieldBackground, ComposerFieldShape)
+                            .padding(horizontal = 16.dp, vertical = 11.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        BasicTextField(
+                            value = draft,
+                            onValueChange = { draft = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(composerFocusRequester)
+                                .onFocusChanged { focus ->
+                                    if (focus.isFocused && isAttachmentPickerPresented) {
+                                        isAttachmentPickerPresented = false
+                                    }
+                                },
+                            enabled = !isVoiceRecorderActive,
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = theme.incomingTextColor),
+                            cursorBrush = SolidColor(theme.accentColor),
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Sentences,
+                            ),
+                            maxLines = 4,
+                            decorationBox = { field ->
+                                Box(contentAlignment = Alignment.CenterStart) {
+                                    if (draft.isEmpty()) {
+                                        Text(
+                                            text = composerPlaceholder,
+                                            color = theme.incomingTimestampColor,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    field()
                                 }
                             },
-                        enabled = !isVoiceRecorderActive,
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = theme.incomingTextColor),
-                        maxLines = 5,
-                        decorationBox = { field ->
-                            Box {
-                                if (draft.isEmpty()) {
-                                    Text(composerPlaceholder, color = theme.incomingTimestampColor)
-                                }
-                                field()
-                            }
-                        },
-                    )
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
                     if (canSend || !showsVoiceRecorder) {
-                        ComposerButton("➤", enabled = canSend, theme = theme, filled = true, onClick = ::submit)
+                        ComposerButton(
+                            icon = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            enabled = canSend,
+                            theme = theme,
+                            onClick = ::submit,
+                        )
                     } else {
                         VoiceMicButton(
                             theme = theme,
@@ -584,6 +638,7 @@ public fun ChatView(
                     )
                 },
             )
+        }
         }
     }
 }
@@ -653,44 +708,34 @@ private fun handleDocumentPick(
 
 @Composable
 internal fun ComposerButton(
-    label: String,
+    icon: ImageVector,
     theme: ChatTheme,
+    contentDescription: String,
     enabled: Boolean = true,
-    filled: Boolean = false,
     onClick: () -> Unit,
 ) {
     Box(
         modifier = Modifier
             .size(44.dp)
+            .clip(CircleShape)
+            .background(theme.composerButtonBackgroundColor)
             .semantics {
                 role = Role.Button
-                contentDescription = label
+                this.contentDescription = contentDescription
             }
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(
-                    when {
-                        filled && enabled -> theme.accentColor
-                        filled && !enabled -> Color(0xFFC7C7CC)
-                        else -> theme.accentColor.copy(alpha = 0.14f)
-                    },
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                label,
-                color = if (filled) theme.accentContentColor else theme.accentColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = theme.composerIconColor.copy(alpha = if (enabled) 1f else 0.45f),
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
+
+private val ComposerFieldShape = RoundedCornerShape(22.dp)
 
 @Composable
 internal fun PendingAttachments(
