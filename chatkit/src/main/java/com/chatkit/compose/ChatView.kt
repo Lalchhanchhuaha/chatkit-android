@@ -124,9 +124,11 @@ public fun ChatView(
     loadPreviousThreshold: Int = 5,
     swipeToReplyEnabled: Boolean = true,
     onReplyToMessage: (ChatMessage) -> Unit = {},
+    onTyping: () -> Unit = {},
     onSubmit: ((ChatDraft) -> Unit)? = null,
     onSend: (String) -> Unit = {},
     attachmentContent: (@Composable (ChatAttachment) -> Unit)? = null,
+    deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -457,6 +459,7 @@ public fun ChatView(
             scrollToNewestRequest = scrollToNewestRequest,
             onJumpToNewest = { scrollToNewestRequest += 1 },
             attachmentContent = resolvedAttachmentContent,
+            deliveryStatusContent = deliveryStatusContent,
             modifier = Modifier.weight(1f).fillMaxWidth(),
         )
 
@@ -532,7 +535,7 @@ public fun ChatView(
                     ) {
                         BasicTextField(
                             value = draft,
-                            onValueChange = { draft = it },
+                            onValueChange = { draft = it; onTyping() },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusRequester(composerFocusRequester)

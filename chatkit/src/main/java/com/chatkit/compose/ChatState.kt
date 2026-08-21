@@ -74,6 +74,7 @@ public fun ChatScreen(
     colors: ChatColors = ChatDefaults.colors(),
     dimensions: ChatDimensions = ChatDimensions(),
     attachmentResolver: AttachmentResolver = AttachmentResolver.None,
+    deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         ConnectionBanner(state.connectionState)
@@ -112,6 +113,7 @@ public fun ChatScreen(
                 } else {
                     null
                 },
+                deliveryStatusContent = deliveryStatusContent,
             )
 
             if (state.isInitialLoading && state.messages.isEmpty()) {

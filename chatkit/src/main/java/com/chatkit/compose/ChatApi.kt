@@ -86,6 +86,7 @@ public fun ChatScreen(
     attachmentResolver: AttachmentResolver = AttachmentResolver.None,
     isTyping: Boolean = false,
     typingIndicatorText: String = "Typing…",
+    onTyping: () -> Unit = {},
     onSubmit: ((ChatDraft) -> Unit)? = null,
     onSendText: (String) -> Unit = {},
     onMediaPicked: (List<ChatMediaAttachment>) -> Unit = {},
@@ -98,6 +99,7 @@ public fun ChatScreen(
     onDeleteMessage: ((messageId: String) -> Unit)? = null,
     onLoadPreviousMessages: (() -> Unit)? = null,
     onReplyToMessage: (ChatMessage) -> Unit = {},
+    deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
 ) {
     val theme = colors.toTheme(dimensions, config.showDeliveryStatus)
     ChatView(
@@ -109,6 +111,7 @@ public fun ChatScreen(
         theme = theme,
         isTyping = isTyping,
         typingIndicatorText = typingIndicatorText,
+        onTyping = onTyping,
         showsComposer = config.showComposer,
         showsVoiceRecorder = config.enableVoiceRecorder,
         showsVideoAttachments = config.enableVideoAttachments,
@@ -134,6 +137,7 @@ public fun ChatScreen(
         onReplyToMessage = onReplyToMessage,
         onSubmit = onSubmit,
         onSend = onSendText,
+        deliveryStatusContent = deliveryStatusContent,
     )
 }
 
