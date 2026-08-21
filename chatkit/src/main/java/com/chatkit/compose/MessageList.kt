@@ -369,6 +369,8 @@ internal fun MessageBubble(
         message.deliveryStatus != DeliveryStatus.None
     val timestampColor = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor
     val textColor = if (incoming) theme.incomingTextColor else theme.outgoingTextColor
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
 
     val swipeModifier = if (onReply == null) {
         Modifier
@@ -387,6 +389,43 @@ internal fun MessageBubble(
 
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val maxBubble = ChatBubbleMetrics.maxBubbleWidth(maxWidth, theme.messageMaximumWidth)
+        // Match iOS content insets (leading 10, trailing 12).
+        val horizontalPadding = 22.dp
+        val captionLayout = remember(
+            trimmedText,
+            hasText,
+            hasMedia,
+            maxBubble,
+            timeText,
+            message.isEdited,
+            showsDelivery,
+            message.deliveryStatus,
+            density,
+            textMeasurer,
+        ) {
+            if (!hasText) {
+                null
+            } else {
+                measureBubbleCaption(
+                    text = trimmedText,
+                    timeText = timeText,
+                    isEdited = message.isEdited,
+                    showsDelivery = showsDelivery,
+                    deliveryStatus = message.deliveryStatus,
+                    maxBubbleWidth = maxBubble,
+                    horizontalPadding = horizontalPadding,
+                    density = density,
+                    textMeasurer = textMeasurer,
+                )
+            }
+        }
+        // Explicit width like iOS bubbleWidthConstraint — same for sent and received.
+        val bubbleWidth = when {
+            captionLayout != null -> captionLayout.bubbleWidth
+            hasMedia -> maxBubble
+            else -> ChatBubbleMetrics.MinimumWidth
+        }
+
         if (swipeOffset > 4f) {
             Text(
                 text = "↩",
@@ -400,13 +439,12 @@ internal fun MessageBubble(
                 .fillMaxWidth()
                 .offset { IntOffset(swipeOffset.roundToInt(), 0) }
                 .then(swipeModifier),
-            horizontalArrangement = if (incoming) Arrangement.Start else Arrangement.End,
         ) {
-            if (!incoming) Spacer(Modifier.width(sideInset))
-            Column(
-                horizontalAlignment = if (incoming) Alignment.Start else Alignment.End,
-                modifier = Modifier.weight(1f, fill = false),
-            ) {
+            // iOS HStack: flexible spacer pushes outgoing trailing / incoming leading.
+            if (!incoming) {
+                Spacer(Modifier.widthIn(min = sideInset).weight(1f))
+            }
+            Column(horizontalAlignment = Alignment.Start) {
                 if (showsSender && incoming && !message.senderName.isNullOrBlank()) {
                     Text(
                         text = message.senderName,
@@ -418,8 +456,8 @@ internal fun MessageBubble(
                 }
                 Column(
                     modifier = Modifier
+                        .width(bubbleWidth)
                         .widthIn(max = maxBubble)
-                        .wrapContentWidth(if (incoming) Alignment.Start else Alignment.End)
                         .background(
                             if (incoming) theme.incomingBubbleColor else theme.outgoingBubbleColor,
                             bubbleShape,
@@ -445,7 +483,7 @@ internal fun MessageBubble(
                         }
                         .padding(
                             start = 10.dp,
-                            end = 10.dp,
+                            end = 12.dp,
                             top = if (hasMedia && !hasText) 4.dp else 8.dp,
                             bottom = 6.dp,
                         ),
@@ -477,9 +515,10 @@ internal fun MessageBubble(
                         attachmentContent(attachment)
                         if (hasText) Spacer(Modifier.height(6.dp))
                     }
-                    if (hasText) {
+                    if (hasText && captionLayout != null) {
                         InlineTimestampCaption(
                             text = trimmedText,
+                            spacer = captionLayout.spacer,
                             timeText = timeText,
                             isEdited = message.isEdited,
                             showsDelivery = showsDelivery,
@@ -487,11 +526,10 @@ internal fun MessageBubble(
                             textColor = textColor,
                             timestampColor = timestampColor,
                             theme = theme,
-                            maxBubbleWidth = maxBubble,
                             onRetry = onRetry,
                             deliveryStatusContent = deliveryStatusContent,
                         )
-                    } else {
+                    } else if (!hasText) {
                         MessageTimestampFooter(
                             timeText = timeText,
                             isEdited = message.isEdited,
@@ -526,7 +564,9 @@ internal fun MessageBubble(
                     }
                 }
             }
-            if (incoming) Spacer(Modifier.width(sideInset))
+            if (incoming) {
+                Spacer(Modifier.widthIn(min = sideInset).weight(1f))
+            }
         }
     }
     if (showEditDialog) {
@@ -548,6 +588,79 @@ internal fun MessageBubble(
     }
 }
 
+private data class MeasuredBubbleCaption(
+    val bubbleWidth: Dp,
+    val spacer: String,
+)
+
+private fun measureBubbleCaption(
+    text: String,
+    timeText: String,
+    isEdited: Boolean,
+    showsDelivery: Boolean,
+    deliveryStatus: DeliveryStatus,
+    maxBubbleWidth: Dp,
+    horizontalPadding: Dp,
+    density: androidx.compose.ui.unit.Density,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+): MeasuredBubbleCaption = with(density) {
+    val messageStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 22.sp)
+    val footerStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp)
+    val maxTextWidth = (maxBubbleWidth - horizontalPadding).coerceAtLeast(40.dp)
+    val maxTextWidthPx = maxTextWidth.toPx()
+
+    var footerWidthPx = textMeasurer.measure(timeText, footerStyle).size.width.toFloat()
+    if (isEdited) {
+        footerWidthPx += textMeasurer.measure("Edited", footerStyle).size.width + 4.dp.toPx()
+    }
+    if (showsDelivery) {
+        footerWidthPx += when (deliveryStatus) {
+            DeliveryStatus.Delivered, DeliveryStatus.Read -> 18.dp.toPx()
+            DeliveryStatus.Failed -> 16.dp.toPx()
+            else -> 14.dp.toPx()
+        } + 4.dp.toPx()
+    }
+    footerWidthPx += 6.dp.toPx()
+
+    val unconstrained = textMeasurer.measure(
+        text = text,
+        style = messageStyle,
+        softWrap = false,
+        maxLines = 1,
+        constraints = Constraints(maxWidth = Constraints.Infinity),
+    )
+    val wrapped = textMeasurer.measure(
+        text = text,
+        style = messageStyle,
+        softWrap = true,
+        constraints = Constraints(maxWidth = maxTextWidthPx.toInt().coerceAtLeast(1)),
+    )
+    val lastLine = (wrapped.lineCount - 1).coerceAtLeast(0)
+    val lastLineWidth = if (wrapped.lineCount > 0) {
+        wrapped.getLineRight(lastLine) - wrapped.getLineLeft(lastLine)
+    } else {
+        0f
+    }
+    val layout = WhatsAppBubbleTextLayoutCalculator.measure(
+        naturalTextWidthPx = unconstrained.size.width.toFloat(),
+        wrappedTextWidthPx = wrapped.size.width.toFloat(),
+        lastLineWidthPx = lastLineWidth,
+        textHeightPx = wrapped.size.height.toFloat(),
+        lineHeightPx = 22.sp.toPx(),
+        maxTextWidthPx = maxTextWidthPx,
+        footerWidthPx = footerWidthPx,
+    )
+    val figureWidthPx = textMeasurer.measure("\u2007", footerStyle).size.width.toFloat().coerceAtLeast(1f)
+    val run = WhatsAppBubbleTextLayoutCalculator.footerSpacerString(layout.spacerWidthPx, figureWidthPx)
+    val spacer = if (layout.footerOnNewLine) "\n$run" else run
+    // Same formula as iOS measuredBubbleWidth (content + padding + slack).
+    val bubbleWidth = (layout.contentWidthPx + horizontalPadding.toPx() + 4.dp.toPx())
+        .toDp()
+        .coerceAtMost(maxBubbleWidth)
+        .coerceAtLeast(72.dp)
+    MeasuredBubbleCaption(bubbleWidth = bubbleWidth, spacer = spacer)
+}
+
 /**
  * iOS/WhatsApp-style caption: message body with a clear footer spacer and the real
  * timestamp/ticks overlaid on the last line (or a dedicated footer line when needed).
@@ -555,6 +668,7 @@ internal fun MessageBubble(
 @Composable
 private fun InlineTimestampCaption(
     text: String,
+    spacer: String,
     timeText: String,
     isEdited: Boolean,
     showsDelivery: Boolean,
@@ -562,90 +676,15 @@ private fun InlineTimestampCaption(
     textColor: Color,
     timestampColor: Color,
     theme: ChatTheme,
-    maxBubbleWidth: Dp,
     onRetry: () -> Unit,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)?,
 ) {
-    val density = LocalDensity.current
-    val textMeasurer = rememberTextMeasurer()
     val messageStyle = androidx.compose.ui.text.TextStyle(
         color = textColor,
         fontSize = 16.sp,
         lineHeight = 22.sp,
     )
-    val footerStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp)
-    val horizontalPadding = 20.dp // 10 + 10 bubble padding
-    val maxTextWidth = (maxBubbleWidth - horizontalPadding).coerceAtLeast(40.dp)
-    val maxTextWidthPx = with(density) { maxTextWidth.toPx() }
-
-    val footerWidthPx = remember(timeText, isEdited, showsDelivery, deliveryStatus, density) {
-        with(density) {
-            var width = textMeasurer.measure(timeText, footerStyle).size.width.toFloat()
-            if (isEdited) {
-                width += textMeasurer.measure("Edited", footerStyle).size.width + 4.dp.toPx()
-            }
-            if (showsDelivery) {
-                width += when (deliveryStatus) {
-                    DeliveryStatus.Delivered, DeliveryStatus.Read -> 18.dp.toPx()
-                    DeliveryStatus.Failed -> 16.dp.toPx()
-                    else -> 14.dp.toPx()
-                } + 4.dp.toPx()
-            }
-            width + 6.dp.toPx()
-        }
-    }
-
-    val layout = remember(text, maxTextWidthPx, footerWidthPx, textMeasurer, density) {
-        val unconstrained = textMeasurer.measure(
-            text = text,
-            style = messageStyle,
-            softWrap = false,
-            maxLines = 1,
-            constraints = Constraints(maxWidth = Constraints.Infinity),
-        )
-        val wrapped = textMeasurer.measure(
-            text = text,
-            style = messageStyle,
-            softWrap = true,
-            constraints = Constraints(maxWidth = maxTextWidthPx.toInt().coerceAtLeast(1)),
-        )
-        val lastLine = (wrapped.lineCount - 1).coerceAtLeast(0)
-        val lastLineWidth = if (wrapped.lineCount > 0) {
-            wrapped.getLineRight(lastLine) - wrapped.getLineLeft(lastLine)
-        } else {
-            0f
-        }
-        WhatsAppBubbleTextLayoutCalculator.measure(
-            naturalTextWidthPx = unconstrained.size.width.toFloat(),
-            wrappedTextWidthPx = wrapped.size.width.toFloat(),
-            lastLineWidthPx = lastLineWidth,
-            textHeightPx = wrapped.size.height.toFloat(),
-            lineHeightPx = with(density) { 22.sp.toPx() },
-            maxTextWidthPx = maxTextWidthPx,
-            footerWidthPx = footerWidthPx,
-        )
-    }
-
-    val figureWidthPx = remember(textMeasurer) {
-        textMeasurer.measure("\u2007", footerStyle).size.width.toFloat().coerceAtLeast(1f)
-    }
-    val spacer = remember(layout.spacerWidthPx, figureWidthPx, layout.footerOnNewLine) {
-        val run = WhatsAppBubbleTextLayoutCalculator.footerSpacerString(layout.spacerWidthPx, figureWidthPx)
-        if (layout.footerOnNewLine) "\n$run" else run
-    }
-    // Width of the text area only; bubble padding is applied by the parent.
-    val contentWidth = with(density) {
-        (layout.contentWidthPx + 4.dp.toPx())
-            .toDp()
-            .coerceAtMost(maxTextWidth)
-            .coerceAtLeast(52.dp)
-    }
-
-    Box(
-        modifier = Modifier
-            .widthIn(max = maxTextWidth)
-            .width(contentWidth),
-    ) {
+    Box(Modifier.fillMaxWidth()) {
         Text(
             text = buildAnnotatedString {
                 append(text)

@@ -39,11 +39,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.4.2")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.4.3")
 }
 ```
 
-For development snapshots, replace `v1.4.2` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.4.3` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -118,13 +118,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.4.2`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.4.3`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.4.3 | Fix outgoing bubble sizing to match incoming (explicit measured width, iOS-style side spacer) |
 | 1.4.2 | iOS bubble parity: 78% max-width, content-hugging size, inline last-line timestamp/footer, 14dp corners |
 | 1.4.1 | Bubble content-wrap, WhatsApp timestamp, inline photo picker, typing indicator bubble |
 | 1.4.0 | iOS-parity UI improvements |
