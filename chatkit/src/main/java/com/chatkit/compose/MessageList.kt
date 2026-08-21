@@ -7,11 +7,15 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -42,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,6 +62,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -63,12 +70,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.util.Date
 import java.time.Instant
+import kotlin.math.roundToInt
 
 /** Matches iOS UITableView insert cadence (~ease-in-out slide). */
 private val MessageInsertAnimation = tween<Float>(
@@ -95,6 +104,9 @@ internal fun MessageList(
     modificationWindowMillis: Long,
     onEditMessage: ((String, String) -> Unit)?,
     onDeleteMessage: ((String) -> Unit)?,
+    onReplyMessage: ((ChatMessage) -> Unit)?,
+    onLoadPreviousMessages: (() -> Unit)?,
+    loadPreviousThreshold: Int,
     onUnreadIncomingCountChanged: (Int) -> Unit,
     onNewestVisibilityChanged: (Boolean) -> Unit,
     scrollToNewestRequest: Int,
@@ -109,6 +121,24 @@ internal fun MessageList(
     val chronologicalItems = remember(messageSnapshot) { buildTranscriptItems(messageSnapshot) }
     val invertedItems = remember(chronologicalItems) { chronologicalItems.asReversed().toList() }
     var trackedLastId by remember { mutableStateOf(messageSnapshot.lastOrNull()?.id) }
+
+    LaunchedEffect(
+        listState,
+        messageSnapshot.size,
+        onLoadPreviousMessages,
+        loadPreviousThreshold,
+    ) {
+        if (onLoadPreviousMessages == null || messageSnapshot.isEmpty()) return@LaunchedEffect
+        snapshotFlow {
+            val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.maxOfOrNull { it.index } ?: 0
+            val triggerIndex = (listState.layoutInfo.totalItemsCount - loadPreviousThreshold)
+                .coerceAtLeast(0)
+            lastVisibleIndex >= triggerIndex
+        }
+            .distinctUntilChanged()
+            .first { it }
+        onLoadPreviousMessages()
+    }
 
     LaunchedEffect(listState) {
         snapshotFlow {
@@ -184,6 +214,9 @@ internal fun MessageList(
                             modificationWindowMillis = modificationWindowMillis,
                             onEditMessage = onEditMessage,
                             onDeleteMessage = onDeleteMessage,
+                            onReply = onReplyMessage?.let { reply ->
+                                { reply(item.message) }
+                            },
                             attachmentContent = attachmentContent,
                         )
                     }
@@ -264,6 +297,7 @@ internal fun MessageBubble(
     modificationWindowMillis: Long,
     onEditMessage: ((String, String) -> Unit)?,
     onDeleteMessage: ((String) -> Unit)?,
+    onReply: (() -> Unit)?,
     attachmentContent: @Composable (ChatAttachment) -> Unit,
 ) {
     val incoming = message.isIncoming
@@ -272,7 +306,40 @@ internal fun MessageBubble(
     var showEditDialog by remember { mutableStateOf(false) }
     var editedText by remember(message.id, message.text) { mutableStateOf(message.text) }
     val canEdit = onEditMessage != null && message.canEdit(Instant.now(), modificationWindowMillis)
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (incoming) Arrangement.Start else Arrangement.End) {
+    val maximumSwipe = with(LocalDensity.current) { 76.dp.toPx() }
+    val replyThreshold = with(LocalDensity.current) { 52.dp.toPx() }
+    var swipeTarget by remember(message.id) { mutableFloatStateOf(0f) }
+    val swipeOffset by animateFloatAsState(swipeTarget, tween(120), label = "reply-swipe")
+    val swipeModifier = if (onReply == null) {
+        Modifier
+    } else {
+        Modifier.draggable(
+            orientation = Orientation.Horizontal,
+            state = rememberDraggableState { delta ->
+                swipeTarget = (swipeTarget + delta).coerceIn(0f, maximumSwipe)
+            },
+            onDragStopped = {
+                if (swipeTarget >= replyThreshold) onReply()
+                swipeTarget = 0f
+            },
+        )
+    }
+    Box(Modifier.fillMaxWidth()) {
+        if (swipeOffset > 4f) {
+            Text(
+                text = "↩",
+                color = theme.accentColor,
+                fontSize = 22.sp,
+                modifier = Modifier.align(Alignment.CenterStart).padding(start = 14.dp),
+            )
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(swipeOffset.roundToInt(), 0) }
+                .then(swipeModifier),
+            horizontalArrangement = if (incoming) Arrangement.Start else Arrangement.End,
+        ) {
         Box {
             Column(
                 modifier = Modifier
@@ -291,14 +358,41 @@ internal fun MessageBubble(
                         Modifier
                     },
                 )
-                .pointerInput(message.id, canEdit, onDeleteMessage) {
+                .pointerInput(message.id, canEdit, onDeleteMessage, onReply) {
                     detectTapGestures(
                         onTap = { if (!incoming && message.deliveryStatus == DeliveryStatus.Failed) onRetry() },
-                        onLongPress = { if (canEdit || onDeleteMessage != null) showActions = true },
+                        onLongPress = {
+                            if (onReply != null || canEdit || onDeleteMessage != null) {
+                                showActions = true
+                            }
+                        },
                     )
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
+            if (message.replyToMessageId != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.07f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        text = message.replyToSenderName?.takeIf { it.isNotBlank() } ?: "Reply",
+                        color = theme.accentColor,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                    )
+                    Text(
+                        text = message.replyToMessageText?.ifBlank { "Attachment" } ?: "Message",
+                        color = if (incoming) theme.incomingTextColor else theme.outgoingTextColor,
+                        fontSize = 12.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+            }
             if (showsSender && incoming && !message.senderName.isNullOrBlank()) {
                 Text(message.senderName, color = theme.accentColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                 Spacer(Modifier.height(2.dp))
@@ -331,6 +425,12 @@ internal fun MessageBubble(
                 }
             }
             DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
+                if (onReply != null) {
+                    DropdownMenuItem(
+                        text = { Text("Reply") },
+                        onClick = { showActions = false; onReply() },
+                    )
+                }
                 if (canEdit) {
                     DropdownMenuItem(
                         text = { Text("Edit") },
@@ -345,6 +445,7 @@ internal fun MessageBubble(
                 }
             }
         }
+    }
     }
     }
     if (showEditDialog) {

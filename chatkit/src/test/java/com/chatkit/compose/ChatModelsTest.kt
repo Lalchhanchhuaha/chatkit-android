@@ -41,6 +41,13 @@ class ChatModelsTest {
     }
 
     @Test
+    fun draftCarriesReplyTarget() {
+        val draft = buildDraft(" reply ", emptyList(), emptyList(), "parent-id")
+        assertEquals("reply", draft.text)
+        assertEquals("parent-id", draft.replyToMessageId)
+    }
+
+    @Test
     fun editEligibilityHonorsDirectionTextAndWindow() {
         val now = Instant.parse("2026-01-01T00:10:00Z")
         val recent = ChatMessage("1", "hello", now.minusSeconds(60), MessageDirection.Outgoing)

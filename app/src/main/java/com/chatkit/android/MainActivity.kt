@@ -23,10 +23,11 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chatkit.android.ui.theme.ChatkitTheme
-import com.chatkit.compose.ChatAttachment
+import com.chatkit.compose.ChatAction
 import com.chatkit.compose.ChatConfig
 import com.chatkit.compose.ChatMessage
 import com.chatkit.compose.ChatScreen
+import com.chatkit.compose.ChatUiState
 import com.chatkit.compose.DeliveryStatus
 import com.chatkit.compose.MessageDirection
 import com.chatkit.compose.TransferState
@@ -78,62 +79,71 @@ private fun ChatKitSample() {
             Text("Aisha", fontSize = 20.sp)
         }
         ChatScreen(
-            messages = messages,
+            state = ChatUiState(
+                messages = messages.toList(),
+                isTyping = isTyping,
+                typingIndicatorText = "Aisha is typing…",
+            ),
             config = ChatConfig(showSenderNames = true, showDeliveryStatus = true),
-            isTyping = isTyping,
-            typingIndicatorText = "Aisha is typing…",
-            onOptimisticMessage = { local ->
-                if (messages.none { it.id == local.id }) {
-                    messages += local
-                }
-            },
-            onRetryMessage = { id ->
-                val index = messages.indexOfFirst { it.id == id }
-                if (index >= 0) {
-                    messages[index] = messages[index].copy(deliveryStatus = DeliveryStatus.Pending)
-                }
-            },
-            onVoiceRecorded = { _, _ ->
-                // Host would upload here; sample leaves the optimistic uploading bubble.
-            },
-            onSubmit = { draft ->
-                isTyping = false
-                // Media/voice optimistic rows are already appended via onOptimisticMessage.
-                // Only append a new host message for text/documents without a prior optimistic row.
-                if (draft.media.isEmpty() && draft.documents.isEmpty()) {
-                    val attachments = draft.documents.mapIndexed { index, uri ->
-                        ChatAttachment(
-                            id = uri.toString(),
-                            fileName = uri.lastPathSegment ?: "document-$index",
-                            mimeType = "application/octet-stream",
-                            localUri = uri,
+            onAction = { action ->
+                when (action) {
+                    is ChatAction.OptimisticMessage -> if (messages.none { it.id == action.message.id }) {
+                        messages += action.message
+                    }
+                    is ChatAction.Submit -> {
+                        isTyping = false
+                        val draft = action.draft
+                        if (draft.media.isEmpty() && draft.documents.isEmpty()) {
+                            if (draft.text.isNotBlank()) {
+                                val repliedMessage = messages.firstOrNull {
+                                    it.id == draft.replyToMessageId
+                                }
+                                messages += ChatMessage(
+                                    id = UUID.randomUUID().toString(),
+                                    text = draft.text,
+                                    timestamp = Instant.now(),
+                                    direction = MessageDirection.Outgoing,
+                                    deliveryStatus = DeliveryStatus.Sent,
+                                    replyToMessageId = repliedMessage?.id,
+                                    replyToMessageText = repliedMessage?.text,
+                                    replyToSenderName = repliedMessage?.senderName,
+                                )
+                            }
+                        } else {
+                            val index = messages.indexOfLast { message ->
+                                message.attachments.any { it.transferState is TransferState.Uploading }
+                            }
+                            if (index >= 0) {
+                                val current = messages[index]
+                                messages[index] = current.copy(
+                                    text = draft.text,
+                                    deliveryStatus = DeliveryStatus.Sent,
+                                    attachments = current.attachments.map {
+                                        it.copy(transferState = TransferState.Uploaded)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    is ChatAction.RetryMessage -> {
+                        val index = messages.indexOfFirst { it.id == action.messageId }
+                        if (index >= 0) messages[index] = messages[index].copy(
+                            deliveryStatus = DeliveryStatus.Pending,
                         )
                     }
-                    if (draft.text.isNotBlank() || attachments.isNotEmpty()) {
-                        messages += ChatMessage(
-                            id = UUID.randomUUID().toString(),
-                            text = draft.text,
-                            timestamp = Instant.now(),
-                            direction = MessageDirection.Outgoing,
-                            deliveryStatus = DeliveryStatus.Sent,
-                            attachments = attachments,
+                    is ChatAction.EditMessage -> {
+                        val index = messages.indexOfFirst { it.id == action.messageId }
+                        if (index >= 0) messages[index] = messages[index].copy(
+                            text = action.text,
+                            isEdited = true,
                         )
                     }
-                } else {
-                    // Upgrade the latest optimistic media row to uploaded for the demo.
-                    val index = messages.indexOfLast { message ->
-                        message.attachments.any { it.transferState is TransferState.Uploading }
-                    }
-                    if (index >= 0) {
-                        val current = messages[index]
-                        messages[index] = current.copy(
-                            text = draft.text,
-                            deliveryStatus = DeliveryStatus.Sent,
-                            attachments = current.attachments.map {
-                                it.copy(transferState = TransferState.Uploaded)
-                            },
-                        )
-                    }
+                    is ChatAction.DeleteMessage -> messages.removeAll { it.id == action.messageId }
+                    is ChatAction.CancelAttachmentUpload -> Unit
+                    is ChatAction.VoiceRecorded -> Unit
+                    ChatAction.LoadPreviousMessages -> Unit
+                    ChatAction.RetryLoading -> Unit
+                    ChatAction.DismissError -> Unit
                 }
             },
         )

@@ -25,6 +25,9 @@ public data class ChatConfig(
     public val cameraCaptureUri: Uri? = null,
     public val messageModificationWindowMillis: Long = 15 * 60 * 1000L,
     public val showDeliveryStatus: Boolean = false,
+    public val enableSwipeToReply: Boolean = true,
+    /** Number of rows from the oldest edge at which pagination is requested. */
+    public val loadPreviousThreshold: Int = 5,
 )
 
 /** Colors for every visible ChatKit surface. */
@@ -91,6 +94,8 @@ public fun ChatScreen(
     onRetryMessage: (messageId: String) -> Unit = {},
     onEditMessage: ((messageId: String, text: String) -> Unit)? = null,
     onDeleteMessage: ((messageId: String) -> Unit)? = null,
+    onLoadPreviousMessages: (() -> Unit)? = null,
+    onReplyToMessage: (ChatMessage) -> Unit = {},
 ) {
     val theme = colors.toTheme(dimensions, config.showDeliveryStatus)
     ChatView(
@@ -121,6 +126,10 @@ public fun ChatScreen(
         modificationWindowMillis = config.messageModificationWindowMillis,
         onEditMessage = onEditMessage,
         onDeleteMessage = onDeleteMessage,
+        onLoadPreviousMessages = onLoadPreviousMessages,
+        loadPreviousThreshold = config.loadPreviousThreshold.coerceAtLeast(1),
+        swipeToReplyEnabled = config.enableSwipeToReply,
+        onReplyToMessage = onReplyToMessage,
         onSubmit = onSubmit,
         onSend = onSendText,
     )

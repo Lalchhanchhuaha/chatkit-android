@@ -12,9 +12,41 @@ networking, persistence, uploads, delivery state, pagination, and retry policy.
 - Optimistic media, document, and voice rows reconciled by stable message ID
 - Hold/slide-to-cancel/slide-up-to-lock voice recording and conversation-scoped audio playback
 - Retry, edit, delete, upload cancellation, host attachment resolution, and configurable theming
+- Swipe-to-reply with composer quote preview and reply metadata on submitted drafts
 - IME/navigation-bar insets, stable lazy-list keys, RTL-compatible layout, and TalkBack semantics
 
-## Add the module
+## Install from GitHub
+
+Published GitHub tags can be consumed as an AAR through JitPack—no clone or source-module setup is
+required. Add JitPack at the end of the repositories in `settings.gradle.kts`:
+
+```kotlin
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url = uri("https://jitpack.io")
+            content {
+                includeGroup("com.github.Lalchhanchhuaha.chatkit-android")
+            }
+        }
+    }
+}
+```
+
+Then add the library module dependency:
+
+```kotlin
+dependencies {
+    implementation("com.github.Lalchhanchhuaha.chatkit-android:chatkit:v1.2.0")
+}
+```
+
+For development snapshots, replace `v1.2.0` with `main-SNAPSHOT`. Tagged versions are recommended
+for production because they are immutable after JitPack builds them.
+
+## Add the source module
 
 ```kotlin
 dependencies {
@@ -41,6 +73,22 @@ ChatScreen(
     onDeleteMessage = viewModel::delete,
 )
 ```
+
+For a Stream-style bound screen, keep loading, connection, error, typing, pagination, and message
+state in your ViewModel and handle a single action stream:
+
+```kotlin
+ChatScreen(
+    state = uiState,
+    onAction = viewModel::onChatAction,
+    config = ChatConfig(showDeliveryStatus = true),
+)
+```
+
+`ChatUiState` covers initial loading, empty and recoverable error UI, connection state, typing, and
+older-message pagination. `ChatAction` covers submit, optimistic rows, upload cancellation, retry,
+edit, delete, voice recordings, error recovery, and pagination. Your ViewModel translates these
+actions into repository/API calls and publishes the next immutable state.
 
 When `onSubmit` is supplied, it is called exactly once. The legacy callbacks (`onSendText`,
 `onMediaPicked`, and `onDocumentsPicked`) are not called for that submission.
@@ -70,12 +118,13 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Maven coordinates: `com.chatkit:chatkit:1.1.0`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.2.0`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.2.0 | State-driven screen, pagination and swipe-to-reply |
 | 1.1.0 | IME/keyboard safe-area handling, bottom-stacked message list, insert slide-up, iOS API/UX parity (attachment panel, hold-to-record voice, day separators, unread jump) |
 | 1.0.0 | Initial publishable Compose ChatKit module |

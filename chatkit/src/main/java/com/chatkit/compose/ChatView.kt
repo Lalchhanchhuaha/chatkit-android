@@ -47,6 +47,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -104,6 +106,10 @@ public fun ChatView(
     modificationWindowMillis: Long = 15 * 60 * 1000L,
     onEditMessage: ((String, String) -> Unit)? = null,
     onDeleteMessage: ((String) -> Unit)? = null,
+    onLoadPreviousMessages: (() -> Unit)? = null,
+    loadPreviousThreshold: Int = 5,
+    swipeToReplyEnabled: Boolean = true,
+    onReplyToMessage: (ChatMessage) -> Unit = {},
     onSubmit: ((ChatDraft) -> Unit)? = null,
     onSend: (String) -> Unit = {},
     attachmentContent: (@Composable (ChatAttachment) -> Unit)? = null,
@@ -112,6 +118,7 @@ public fun ChatView(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
+    val composerFocusRequester = remember { FocusRequester() }
     val recorder = remember(context) { VoiceRecorder(context.applicationContext) }
     val audioPlayer = remember(context) { AudioPlayerController(context.applicationContext) }
     val resolvedAttachmentContent: @Composable (ChatAttachment) -> Unit =
@@ -127,6 +134,7 @@ public fun ChatView(
         }
 
     var draft by remember { mutableStateOf("") }
+    var replyingTo by remember { mutableStateOf<ChatMessage?>(null) }
     var isAttachmentPickerPresented by remember { mutableStateOf(false) }
     val pendingMedia = remember { mutableStateListOf<ChatMediaAttachment>() }
     val pendingDocuments = remember { mutableStateListOf<Uri>() }
@@ -152,6 +160,16 @@ public fun ChatView(
     LaunchedEffect(hostMessages.map { it.id }) {
         val claimed = hostMessages.map { it.id }.toSet()
         optimisticMessages.removeAll { it.id in claimed }
+        if (replyingTo != null && displayedMessages.none { it.id == replyingTo?.id }) {
+            replyingTo = null
+        }
+    }
+
+    LaunchedEffect(replyingTo?.id, showsComposer) {
+        if (replyingTo != null && showsComposer) {
+            composerFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
     }
 
     val mimeArray = remember(documentMimeTypes) { documentMimeTypes.toTypedArray() }
@@ -285,6 +303,9 @@ public fun ChatView(
             timestamp = Instant.now(),
             direction = MessageDirection.Outgoing,
             deliveryStatus = DeliveryStatus.None,
+            replyToMessageId = replyingTo?.id,
+            replyToMessageText = replyingTo?.text,
+            replyToSenderName = replyingTo?.senderName,
             attachments = listOf(
                 ChatAttachment(
                     id = id,
@@ -299,6 +320,7 @@ public fun ChatView(
         optimisticMessages += optimistic
         onOptimisticMessage(optimistic)
         onVoiceRecorded(recording.uri, recording.durationMillis)
+        replyingTo = null
     }
 
     fun finishVoiceRecording() {
@@ -331,6 +353,9 @@ public fun ChatView(
                 timestamp = Instant.now(),
                 direction = MessageDirection.Outgoing,
                 deliveryStatus = DeliveryStatus.None,
+                replyToMessageId = replyingTo?.id,
+                replyToMessageText = replyingTo?.text,
+                replyToSenderName = replyingTo?.senderName,
                 attachments = pendingMedia.map { media ->
                     val isVideo = media.mediaType == MediaType.Video
                     ChatAttachment(
@@ -355,7 +380,12 @@ public fun ChatView(
             onOptimisticMessage(optimistic)
         }
 
-        val submission = buildDraft(text, pendingMedia.toList(), pendingDocuments.toList())
+        val submission = buildDraft(
+            text,
+            pendingMedia.toList(),
+            pendingDocuments.toList(),
+            replyingTo?.id,
+        )
         if (onSubmit != null) {
             onSubmit(submission)
         } else {
@@ -364,6 +394,7 @@ public fun ChatView(
             if (submission.text.isNotEmpty()) onSend(submission.text)
         }
         draft = ""
+        replyingTo = null
         dismissAttachmentPicker()
     }
 
@@ -402,6 +433,16 @@ public fun ChatView(
             modificationWindowMillis = modificationWindowMillis,
             onEditMessage = onEditMessage,
             onDeleteMessage = onDeleteMessage,
+            onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
+                { message ->
+                    replyingTo = message
+                    onReplyToMessage(message)
+                }
+            } else {
+                null
+            },
+            onLoadPreviousMessages = onLoadPreviousMessages,
+            loadPreviousThreshold = loadPreviousThreshold,
             onUnreadIncomingCountChanged = { unreadIncomingCount = it },
             onNewestVisibilityChanged = { isViewingNewest = it },
             scrollToNewestRequest = scrollToNewestRequest,
@@ -416,6 +457,13 @@ public fun ChatView(
                 .background(theme.composerBarColor),
         ) {
             HorizontalDivider(color = Color.Black.copy(alpha = 0.08f))
+            replyingTo?.let { message ->
+                ReplyComposerPreview(
+                    message = message,
+                    theme = theme,
+                    onCancel = { replyingTo = null },
+                )
+            }
             if ((pendingMedia.isNotEmpty() || pendingDocuments.isNotEmpty()) && !isAttachmentPickerPresented) {
                 PendingAttachments(
                     media = pendingMedia,
@@ -447,6 +495,7 @@ public fun ChatView(
                         onValueChange = { draft = it },
                         modifier = Modifier
                             .weight(1f)
+                            .focusRequester(composerFocusRequester)
                             .border(0.5.dp, theme.composerFieldBorderColor, RoundedCornerShape(18.dp))
                             .background(theme.composerFieldBackground, RoundedCornerShape(18.dp))
                             .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -536,6 +585,53 @@ public fun ChatView(
                 },
             )
         }
+    }
+}
+
+@Composable
+private fun ReplyComposerPreview(
+    message: ChatMessage,
+    theme: ChatTheme,
+    onCancel: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.composerFieldBackground)
+            .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            Modifier
+                .size(width = 3.dp, height = 38.dp)
+                .background(theme.accentColor, RoundedCornerShape(2.dp)),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = message.senderName?.takeIf { it.isNotBlank() }
+                    ?: if (message.isIncoming) "Replying" else "You",
+                color = theme.accentColor,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+            )
+            Text(
+                text = message.text.ifBlank { "Attachment" },
+                color = theme.incomingTimestampColor,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = "✕",
+            modifier = Modifier
+                .clip(CircleShape)
+                .clickable(onClick = onCancel)
+                .padding(8.dp)
+                .semantics { contentDescription = "Cancel reply" },
+            color = theme.incomingTimestampColor,
+        )
     }
 }
 

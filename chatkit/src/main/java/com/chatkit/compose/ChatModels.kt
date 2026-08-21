@@ -15,6 +15,9 @@ public data class ChatMessage(
     public val attachments: List<ChatAttachment> = emptyList(),
     public val deliveryStatus: DeliveryStatus = DeliveryStatus.Sent,
     public val isEdited: Boolean = false,
+    public val replyToMessageId: String? = null,
+    public val replyToMessageText: String? = null,
+    public val replyToSenderName: String? = null,
 ) {
     /** True when this row should use the incoming bubble treatment. */
     public val isIncoming: Boolean get() = direction == MessageDirection.Incoming
@@ -99,6 +102,7 @@ public data class ChatDraft(
     public val text: String,
     public val media: List<ChatMediaAttachment> = emptyList(),
     public val documents: List<Uri> = emptyList(),
+    public val replyToMessageId: String? = null,
 )
 
 /** Resolves host-owned attachment content without coupling ChatKit to a network stack. */
@@ -146,4 +150,5 @@ internal fun buildDraft(
     text: String,
     media: List<ChatMediaAttachment>,
     documents: List<Uri>,
-): ChatDraft = ChatDraft(text.trim(), media, documents)
+    replyToMessageId: String? = null,
+): ChatDraft = ChatDraft(text.trim(), media, documents, replyToMessageId)
