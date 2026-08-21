@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -42,6 +41,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -196,24 +196,6 @@ public fun ChatView(
     }
 
     val mimeArray = remember(documentMimeTypes) { documentMimeTypes.toTypedArray() }
-    val mediaPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = maximumMediaSelection),
-    ) { uris ->
-        pendingDocuments.clear()
-        pendingMedia.clear()
-        pendingMedia += uris.take(maximumMediaSelection).map { uri ->
-            val type = context.contentResolver.getType(uri)
-            ChatMediaAttachment(
-                id = uri.toString(),
-                mediaType = if (type?.startsWith("video/") == true) {
-                    MediaType.Video
-                } else {
-                    MediaType.Photo
-                },
-                localUri = uri,
-            )
-        }
-    }
     val cameraPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture(),
     ) { captured ->
@@ -531,6 +513,18 @@ public fun ChatView(
                             presentAttachmentPicker()
                         }
                     }
+                    if (cameraCaptureUri != null) {
+                        Spacer(Modifier.width(8.dp))
+                        ComposerButton(
+                            icon = Icons.Default.CameraAlt,
+                            contentDescription = "Open camera",
+                            enabled = !isVoiceRecorderActive,
+                            theme = theme,
+                        ) {
+                            dismissAttachmentPicker()
+                            cameraPicker.launch(cameraCaptureUri)
+                        }
+                    }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         modifier = Modifier
@@ -622,7 +616,6 @@ public fun ChatView(
                 theme = theme,
                 showsVideoAttachments = showsVideoAttachments,
                 showsDocumentAttachments = showsDocumentAttachments,
-                showsCamera = cameraCaptureUri != null,
                 maximumMediaSelection = maximumMediaSelection,
                 documentSelectionCount = pendingDocuments.size,
                 selectedMedia = pendingMedia.toList(),
@@ -633,22 +626,6 @@ public fun ChatView(
                     if (attachments.isNotEmpty()) pendingDocuments.clear()
                 },
                 onDocumentPickerRequested = ::launchDocumentPicker,
-                onCameraRequested = {
-                    isAttachmentPickerPresented = false
-                    cameraCaptureUri?.let(cameraPicker::launch)
-                },
-                onFallbackPickMedia = {
-                    isAttachmentPickerPresented = false
-                    mediaPicker.launch(
-                        PickVisualMediaRequest(
-                            if (showsVideoAttachments) {
-                                ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                            } else {
-                                ActivityResultContracts.PickVisualMedia.ImageOnly
-                            },
-                        ),
-                    )
-                },
             )
         }
         }

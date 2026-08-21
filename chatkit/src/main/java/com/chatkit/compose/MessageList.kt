@@ -48,8 +48,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Pause
@@ -366,7 +364,7 @@ internal fun MessageBubble(
     }
     val showsDelivery = !incoming &&
         theme.showsDeliveryStatus &&
-        message.deliveryStatus != DeliveryStatus.None
+        message.deliveryStatus.displayedDeliveryStatus != DeliveryStatus.None
     val timestampColor = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor
     val textColor = if (incoming) theme.incomingTextColor else theme.outgoingTextColor
     val density = LocalDensity.current
@@ -518,7 +516,7 @@ internal fun MessageBubble(
                     if (hasText && captionLayout != null) {
                         InlineTimestampCaption(
                             text = trimmedText,
-                            spacer = captionLayout.spacer,
+                            placeholder = captionLayout.placeholder,
                             timeText = timeText,
                             isEdited = message.isEdited,
                             showsDelivery = showsDelivery,
@@ -590,8 +588,35 @@ internal fun MessageBubble(
 
 private data class MeasuredBubbleCaption(
     val bubbleWidth: Dp,
-    val spacer: String,
+    val placeholder: String,
 )
+
+/**
+ * Builds a transparent trailing placeholder that matches the real footer width as closely
+ * as possible (actual time / Edited text + tick slots). Avoids figure-space runs that are
+ * wider than the footer and wrap onto a new line while the last text line still looks empty.
+ */
+private fun footerPlaceholder(
+    timeText: String,
+    isEdited: Boolean,
+    showsDelivery: Boolean,
+    deliveryStatus: DeliveryStatus,
+): String = buildString {
+    // Small gap between body and footer (iOS uses two NBSPs).
+    append("\u00A0\u00A0")
+    if (isEdited) append("Edited ")
+    append(timeText)
+    if (showsDelivery) {
+        // Approximate tick / double-tick icon width at 11sp.
+        append(
+            when (deliveryStatus) {
+                DeliveryStatus.Delivered, DeliveryStatus.Read -> "\u2007\u2007\u2007\u2007"
+                DeliveryStatus.Failed -> "\u2007\u2007\u2007"
+                else -> "\u2007\u2007\u2007"
+            },
+        )
+    }
+}
 
 private fun measureBubbleCaption(
     text: String,
@@ -605,70 +630,101 @@ private fun measureBubbleCaption(
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
 ): MeasuredBubbleCaption = with(density) {
     val messageStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 22.sp)
-    val footerStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp)
     val maxTextWidth = (maxBubbleWidth - horizontalPadding).coerceAtLeast(40.dp)
-    val maxTextWidthPx = maxTextWidth.toPx()
-
-    var footerWidthPx = textMeasurer.measure(timeText, footerStyle).size.width.toFloat()
-    if (isEdited) {
-        footerWidthPx += textMeasurer.measure("Edited", footerStyle).size.width + 4.dp.toPx()
+    val maxTextWidthPx = maxTextWidth.toPx().toInt().coerceAtLeast(1)
+    val placeholder = footerPlaceholder(timeText, isEdited, showsDelivery, deliveryStatus)
+    val annotated = androidx.compose.ui.text.buildAnnotatedString {
+        append(text)
+        withStyle(SpanStyle(color = Color.Transparent, fontSize = 11.sp)) {
+            append(placeholder)
+        }
     }
-    if (showsDelivery) {
-        footerWidthPx += when (deliveryStatus) {
-            DeliveryStatus.Delivered, DeliveryStatus.Read -> 18.dp.toPx()
-            DeliveryStatus.Failed -> 16.dp.toPx()
-            else -> 14.dp.toPx()
-        } + 4.dp.toPx()
-    }
-    footerWidthPx += 6.dp.toPx()
 
-    val unconstrained = textMeasurer.measure(
-        text = text,
+    // Preferred width if text + footer stay on one line.
+    val singleLine = textMeasurer.measure(
+        text = annotated,
         style = messageStyle,
         softWrap = false,
         maxLines = 1,
         constraints = Constraints(maxWidth = Constraints.Infinity),
     )
-    val wrapped = textMeasurer.measure(
-        text = text,
-        style = messageStyle,
-        softWrap = true,
-        constraints = Constraints(maxWidth = maxTextWidthPx.toInt().coerceAtLeast(1)),
-    )
-    val lastLine = (wrapped.lineCount - 1).coerceAtLeast(0)
-    val lastLineWidth = if (wrapped.lineCount > 0) {
-        wrapped.getLineRight(lastLine) - wrapped.getLineLeft(lastLine)
+    val contentWidthPx = if (singleLine.size.width <= maxTextWidthPx) {
+        singleLine.size.width.toFloat()
     } else {
-        0f
+        // Body needs to wrap; size to the wrapped layout (footer may sit on last or next line).
+        val wrapped = textMeasurer.measure(
+            text = annotated,
+            style = messageStyle,
+            softWrap = true,
+            constraints = Constraints(maxWidth = maxTextWidthPx),
+        )
+        // Prefer growing to fit last-line footer when the calculator says it fits.
+        val bodyOnly = textMeasurer.measure(
+            text = text,
+            style = messageStyle,
+            softWrap = true,
+            constraints = Constraints(maxWidth = maxTextWidthPx),
+        )
+        val lastLine = (bodyOnly.lineCount - 1).coerceAtLeast(0)
+        val lastLineWidth = if (bodyOnly.lineCount > 0) {
+            bodyOnly.getLineRight(lastLine) - bodyOnly.getLineLeft(lastLine)
+        } else {
+            0f
+        }
+        val footerWidthPx = textMeasurer.measure(
+            text = androidx.compose.ui.text.AnnotatedString(
+                placeholder,
+                spanStyles = listOf(
+                    androidx.compose.ui.text.AnnotatedString.Range(
+                        SpanStyle(fontSize = 11.sp),
+                        0,
+                        placeholder.length,
+                    ),
+                ),
+            ),
+            style = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
+            softWrap = false,
+            maxLines = 1,
+            constraints = Constraints(maxWidth = Constraints.Infinity),
+        ).size.width.toFloat()
+        val layout = WhatsAppBubbleTextLayoutCalculator.measure(
+            naturalTextWidthPx = textMeasurer.measure(
+                text = text,
+                style = messageStyle,
+                softWrap = false,
+                maxLines = 1,
+                constraints = Constraints(maxWidth = Constraints.Infinity),
+            ).size.width.toFloat(),
+            wrappedTextWidthPx = bodyOnly.size.width.toFloat(),
+            lastLineWidthPx = lastLineWidth,
+            textHeightPx = bodyOnly.size.height.toFloat(),
+            lineHeightPx = 22.sp.toPx(),
+            maxTextWidthPx = maxTextWidthPx.toFloat(),
+            footerWidthPx = footerWidthPx,
+        )
+        if (!layout.footerOnNewLine) {
+            layout.contentWidthPx
+        } else {
+            maxOf(wrapped.size.width.toFloat(), maxTextWidthPx.toFloat())
+        }
     }
-    val layout = WhatsAppBubbleTextLayoutCalculator.measure(
-        naturalTextWidthPx = unconstrained.size.width.toFloat(),
-        wrappedTextWidthPx = wrapped.size.width.toFloat(),
-        lastLineWidthPx = lastLineWidth,
-        textHeightPx = wrapped.size.height.toFloat(),
-        lineHeightPx = 22.sp.toPx(),
-        maxTextWidthPx = maxTextWidthPx,
-        footerWidthPx = footerWidthPx,
-    )
-    val figureWidthPx = textMeasurer.measure("\u2007", footerStyle).size.width.toFloat().coerceAtLeast(1f)
-    val run = WhatsAppBubbleTextLayoutCalculator.footerSpacerString(layout.spacerWidthPx, figureWidthPx)
-    val spacer = if (layout.footerOnNewLine) "\n$run" else run
-    // Same formula as iOS measuredBubbleWidth (content + padding + slack).
-    val bubbleWidth = (layout.contentWidthPx + horizontalPadding.toPx() + 4.dp.toPx())
+
+    val bubbleWidth = (contentWidthPx + horizontalPadding.toPx() + 6.dp.toPx())
         .toDp()
         .coerceAtMost(maxBubbleWidth)
         .coerceAtLeast(72.dp)
-    MeasuredBubbleCaption(bubbleWidth = bubbleWidth, spacer = spacer)
+    MeasuredBubbleCaption(bubbleWidth = bubbleWidth, placeholder = placeholder)
 }
 
 /**
- * iOS/WhatsApp-style caption: message body with a clear footer spacer and the real
- * timestamp/ticks overlaid on the last line (or a dedicated footer line when needed).
+ * iOS/WhatsApp-style caption: body + transparent footer placeholder, with the real
+ * timestamp/ticks overlaid at bottom-end. Placeholder uses the real time string so it
+ * does not wrap early and leave an empty gap on the last text line.
  */
 @Composable
 private fun InlineTimestampCaption(
     text: String,
-    spacer: String,
+    placeholder: String,
     timeText: String,
     isEdited: Boolean,
     showsDelivery: Boolean,
@@ -689,7 +745,7 @@ private fun InlineTimestampCaption(
             text = buildAnnotatedString {
                 append(text)
                 withStyle(SpanStyle(color = Color.Transparent, fontSize = 11.sp)) {
-                    append(spacer)
+                    append(placeholder)
                 }
             },
             style = messageStyle,
@@ -853,17 +909,12 @@ internal fun DefaultAttachment(
 
 @Composable
 private fun DeliveryStatus(status: DeliveryStatus, theme: ChatTheme, onRetry: () -> Unit) {
-    when (status) {
-        DeliveryStatus.None -> Unit
-        DeliveryStatus.Pending, DeliveryStatus.Sent ->
-            Icon(Icons.Default.Check, contentDescription = "Sent", tint = theme.outgoingTimestampColor, modifier = Modifier.size(14.dp))
-        DeliveryStatus.Failed ->
-            Icon(Icons.Default.Error, contentDescription = "Failed", tint = Color(0xFFFF8A80), modifier = Modifier.size(14.dp).clickable(onClick = onRetry))
-        DeliveryStatus.Delivered ->
-            Icon(Icons.Default.DoneAll, contentDescription = "Delivered", tint = theme.outgoingTimestampColor, modifier = Modifier.size(14.dp))
-        DeliveryStatus.Read ->
-            Icon(Icons.Default.DoneAll, contentDescription = "Read", tint = theme.readReceiptColor, modifier = Modifier.size(14.dp))
-    }
+    DeliveryReceiptMark(
+        status = status,
+        theme = theme,
+        timestampColor = theme.outgoingTimestampColor,
+        onRetry = onRetry,
+    )
 }
 
 @Composable

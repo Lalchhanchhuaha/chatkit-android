@@ -32,6 +32,16 @@ public enum class MessageDirection { Incoming, Outgoing }
 /** Host-owned delivery state for an outgoing message. */
 public enum class DeliveryStatus { None, Pending, Failed, Sent, Delivered, Read }
 
+/**
+ * Status used for ticks. Pending displays as Sent so a single tick appears
+ * immediately (iOS `displayedDeliveryStatus`).
+ */
+public val DeliveryStatus.displayedDeliveryStatus: DeliveryStatus
+    get() = when (this) {
+        DeliveryStatus.Pending -> DeliveryStatus.Sent
+        else -> this
+    }
+
 /** Immutable attachment metadata. Content resolution remains the host's responsibility. */
 @Immutable
 public data class ChatAttachment(

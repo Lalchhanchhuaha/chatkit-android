@@ -117,4 +117,10 @@ class DaySeparatorsTest {
         assertEquals("b", (inverted[0] as TranscriptItem.Message).message.text)
         assertTrue(inverted.last() is TranscriptItem.DaySeparator)
     }
+
+    @Test
+    fun pendingDeliveryDisplaysAsSentTick() {
+        assertEquals(DeliveryStatus.Sent, DeliveryStatus.Pending.displayedDeliveryStatus)
+        assertEquals(DeliveryStatus.Read, DeliveryStatus.Read.displayedDeliveryStatus)
+    }
 }
