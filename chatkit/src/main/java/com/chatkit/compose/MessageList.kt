@@ -91,7 +91,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.util.Date
 import java.time.Instant
 import kotlin.math.roundToInt
 
@@ -217,7 +216,7 @@ internal fun MessageList(
             if (isTyping && isViewingNewest) {
                 item(key = "chatkit-typing") {
                     AnimatedListRow {
-                        TypingIndicator(typingIndicatorText, theme)
+                        TypingIndicatorBubble(typingIndicatorText, theme)
                     }
                 }
             }
@@ -341,7 +340,6 @@ internal fun MessageBubble(
 ) {
     val incoming = message.isIncoming
     val bubbleShape = messageBubbleShape(incoming, theme.bubbleCornerRadius)
-    val context = LocalContext.current
     var showActions by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
     var editedText by remember(message.id, message.text) { mutableStateOf(message.text) }
@@ -392,10 +390,7 @@ internal fun MessageBubble(
             }
             Column(
                 modifier = Modifier
-                .then(
-                    if (theme.messageMaximumWidth == Dp.Unspecified) Modifier.fillMaxWidth(0.78f)
-                    else Modifier.widthIn(max = theme.messageMaximumWidth),
-                )
+                .widthIn(max = if (theme.messageMaximumWidth == Dp.Unspecified) 280.dp else theme.messageMaximumWidth)
                 .background(
                     if (incoming) theme.incomingBubbleColor else theme.outgoingBubbleColor,
                     bubbleShape,
@@ -446,35 +441,45 @@ internal fun MessageBubble(
                 attachmentContent(attachment)
                 if (message.text.isNotBlank()) Spacer(Modifier.height(6.dp))
             }
-            Box(contentAlignment = Alignment.BottomEnd) {
-                Column {
-                    if (message.text.isNotBlank()) {
-                        Text(
-                            message.text + "       ", // Padding space for inline timestamp overlay
-                            color = if (incoming) theme.incomingTextColor else theme.outgoingTextColor,
-                            fontSize = 16.sp,
-                            lineHeight = 22.sp,
-                        )
-                    }
+            // Message text
+            if (message.text.isNotBlank()) {
+                Text(
+                    message.text,
+                    color = if (incoming) theme.incomingTextColor else theme.outgoingTextColor,
+                    fontSize = 16.sp,
+                    lineHeight = 22.sp,
+                )
+            }
+            // WhatsApp-style timestamp row: right-aligned below message text
+            Row(
+                modifier = Modifier
+                    .align(Alignment.End)
+                    .padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+            ) {
+                val timeText = remember(message.timestampMillis) {
+                    java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                        .format(java.util.Date(message.timestampMillis))
                 }
-                Row(Modifier.padding(start = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    timeText,
+                    color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor,
+                    fontSize = 11.sp,
+                )
+                if (message.isEdited) {
                     Text(
-                        remember(message.timestampMillis, context) {
-                            android.text.format.DateFormat.getTimeFormat(context).format(Date(message.timestampMillis))
-                        },
+                        " · edited",
                         color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor,
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                     )
-                    if (message.isEdited) {
-                        Text(" · edited", color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor, fontSize = 10.sp)
-                    }
-                    if (!incoming && theme.showsDeliveryStatus) {
-                        Spacer(Modifier.widthIn(min = 4.dp))
-                        if (deliveryStatusContent != null) {
-                            deliveryStatusContent(message.deliveryStatus, onRetry)
-                        } else {
-                            DeliveryStatus(message.deliveryStatus, theme, onRetry)
-                        }
+                }
+                if (!incoming && theme.showsDeliveryStatus) {
+                    Spacer(Modifier.size(width = 3.dp, height = 1.dp))
+                    if (deliveryStatusContent != null) {
+                        deliveryStatusContent(message.deliveryStatus, onRetry)
+                    } else {
+                        DeliveryStatus(message.deliveryStatus, theme, onRetry)
                     }
                 }
             }
@@ -661,35 +666,72 @@ internal fun DateSeparator(label: String, theme: ChatTheme) {
     }
 }
 
+/**
+ * WhatsApp/iMessage-style typing indicator: an incoming bubble with the same tail shape
+ * as a regular incoming message, containing three bouncing dots.
+ */
 @Composable
-internal fun TypingIndicator(label: String, theme: ChatTheme) {
+internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
+    val bubbleShape = RoundedCornerShape(
+        topStart = theme.bubbleCornerRadius,
+        topEnd = theme.bubbleCornerRadius,
+        bottomStart = 0.dp, // tail — matches incoming message shape
+        bottomEnd = theme.bubbleCornerRadius,
+    )
     val transition = rememberInfiniteTransition(label = "typing")
-    val dot1Offset by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = -6f,
+    val dot1Alpha by transition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(400, easing = FastOutSlowInEasing),
+            animation = tween(500, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "dot1"
     )
-    val dot2Offset by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = -6f,
+    val dot2Alpha by transition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(400, delayMillis = 150, easing = FastOutSlowInEasing),
+            animation = tween(500, delayMillis = 160, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "dot2"
     )
-    val dot3Offset by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = -6f,
+    val dot3Alpha by transition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(400, delayMillis = 300, easing = FastOutSlowInEasing),
+            animation = tween(500, delayMillis = 320, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "dot3"
+    )
+    val dot1Offset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = -5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dot1y"
+    )
+    val dot2Offset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = -5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, delayMillis = 160, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dot2y"
+    )
+    val dot3Offset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = -5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, delayMillis = 320, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dot3y"
     )
 
     Row(
@@ -700,15 +742,39 @@ internal fun TypingIndicator(label: String, theme: ChatTheme) {
     ) {
         Row(
             modifier = Modifier
-                .background(theme.typingIndicatorBubbleColor, RoundedCornerShape(theme.bubbleCornerRadius))
-                .border(1.dp, theme.incomingBubbleBorderColor, RoundedCornerShape(theme.bubbleCornerRadius))
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .background(theme.typingIndicatorBubbleColor, bubbleShape)
+                .border(0.5.dp, theme.incomingBubbleBorderColor, bubbleShape)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.offset(y = dot1Offset.dp).size(6.dp).background(theme.typingIndicatorTextColor, androidx.compose.foundation.shape.CircleShape))
-            Box(Modifier.offset(y = dot2Offset.dp).size(6.dp).background(theme.typingIndicatorTextColor, androidx.compose.foundation.shape.CircleShape))
-            Box(Modifier.offset(y = dot3Offset.dp).size(6.dp).background(theme.typingIndicatorTextColor, androidx.compose.foundation.shape.CircleShape))
+            Box(
+                Modifier
+                    .offset(y = dot1Offset.dp)
+                    .size(8.dp)
+                    .background(
+                        theme.typingIndicatorTextColor.copy(alpha = dot1Alpha),
+                        CircleShape,
+                    )
+            )
+            Box(
+                Modifier
+                    .offset(y = dot2Offset.dp)
+                    .size(8.dp)
+                    .background(
+                        theme.typingIndicatorTextColor.copy(alpha = dot2Alpha),
+                        CircleShape,
+                    )
+            )
+            Box(
+                Modifier
+                    .offset(y = dot3Offset.dp)
+                    .size(8.dp)
+                    .background(
+                        theme.typingIndicatorTextColor.copy(alpha = dot3Alpha),
+                        CircleShape,
+                    )
+            )
         }
     }
 }
