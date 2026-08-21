@@ -28,7 +28,7 @@ dependencyResolutionManagement {
         maven {
             url = uri("https://jitpack.io")
             content {
-                includeGroup("com.github.Lalchhanchhuaha.chatkit-android")
+                includeGroup("com.github.Lalchhanchhuaha")
             }
         }
     }
@@ -39,7 +39,7 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha.chatkit-android:chatkit:v1.2.0")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.2.0")
 }
 ```
 
