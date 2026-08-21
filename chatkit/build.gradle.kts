@@ -40,6 +40,7 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -57,7 +58,7 @@ dependencies {
 // JitPack supplies GROUP and VERSION for tagged GitHub builds. Local publishing keeps stable
 // coordinates so consumers can also test the AAR through mavenLocal().
 group = providers.environmentVariable("GROUP").getOrElse("com.chatkit")
-version = providers.environmentVariable("VERSION").getOrElse("1.3.0")
+version = providers.environmentVariable("VERSION").getOrElse("1.4.0")
 
 afterEvaluate {
     publishing {

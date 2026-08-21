@@ -47,6 +47,18 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.PlayCircleFilled
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -116,6 +128,7 @@ internal fun MessageList(
     scrollToNewestRequest: Int,
     onJumpToNewest: () -> Unit,
     attachmentContent: @Composable (ChatAttachment) -> Unit,
+    deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     // Keep index 0 as the newest row. reverseLayout anchors that row to the
@@ -227,6 +240,7 @@ internal fun MessageList(
                                 { reply(item.message) }
                             },
                             attachmentContent = attachmentContent,
+                            deliveryStatusContent = deliveryStatusContent,
                         )
                     }
                 }
@@ -323,6 +337,7 @@ internal fun MessageBubble(
     onDeleteMessage: ((String) -> Unit)?,
     onReply: (() -> Unit)?,
     attachmentContent: @Composable (ChatAttachment) -> Unit,
+    deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
 ) {
     val incoming = message.isIncoming
     val bubbleShape = messageBubbleShape(incoming, theme.bubbleCornerRadius)
@@ -431,28 +446,36 @@ internal fun MessageBubble(
                 attachmentContent(attachment)
                 if (message.text.isNotBlank()) Spacer(Modifier.height(6.dp))
             }
-            if (message.text.isNotBlank()) {
-                Text(
-                    message.text,
-                    color = if (incoming) theme.incomingTextColor else theme.outgoingTextColor,
-                    fontSize = 16.sp,
-                    lineHeight = 22.sp,
-                )
-            }
-            Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    remember(message.timestampMillis, context) {
-                        android.text.format.DateFormat.getTimeFormat(context).format(Date(message.timestampMillis))
-                    },
-                    color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor,
-                    fontSize = 10.sp,
-                )
-                if (message.isEdited) {
-                    Text(" · edited", color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor, fontSize = 10.sp)
+            Box(contentAlignment = Alignment.BottomEnd) {
+                Column {
+                    if (message.text.isNotBlank()) {
+                        Text(
+                            message.text + "       ", // Padding space for inline timestamp overlay
+                            color = if (incoming) theme.incomingTextColor else theme.outgoingTextColor,
+                            fontSize = 16.sp,
+                            lineHeight = 22.sp,
+                        )
+                    }
                 }
-                if (!incoming && theme.showsDeliveryStatus) {
-                    Spacer(Modifier.widthIn(min = 4.dp))
-                    DeliveryStatus(message.deliveryStatus, theme, onRetry)
+                Row(Modifier.padding(start = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        remember(message.timestampMillis, context) {
+                            android.text.format.DateFormat.getTimeFormat(context).format(Date(message.timestampMillis))
+                        },
+                        color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor,
+                        fontSize = 10.sp,
+                    )
+                    if (message.isEdited) {
+                        Text(" · edited", color = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor, fontSize = 10.sp)
+                    }
+                    if (!incoming && theme.showsDeliveryStatus) {
+                        Spacer(Modifier.widthIn(min = 4.dp))
+                        if (deliveryStatusContent != null) {
+                            deliveryStatusContent(message.deliveryStatus, onRetry)
+                        } else {
+                            DeliveryStatus(message.deliveryStatus, theme, onRetry)
+                        }
+                    }
                 }
             }
             DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
@@ -557,17 +580,17 @@ internal fun DefaultAttachment(
         if (bitmap != null) {
             Image(bitmap!!, attachment.fileName, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             if (attachment.isVideo) {
-                Text("▶", color = Color.White, fontSize = 28.sp)
+                Icon(Icons.Default.PlayCircleFilled, contentDescription = "Play Video", tint = Color.White, modifier = Modifier.size(48.dp))
             }
         } else {
-            val marker = when {
-                attachment.isVideo -> "▶"
-                attachment.isAudio -> "♪"
-                attachment.isImage -> "▧"
-                else -> "▤"
+            val markerIcon = when {
+                attachment.isVideo -> Icons.Default.PlayArrow
+                attachment.isAudio -> Icons.Default.Audiotrack
+                attachment.isImage -> Icons.Default.Image
+                else -> Icons.Default.InsertDriveFile
             }
             Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(marker, color = theme.accentColor, fontSize = 22.sp)
+                Icon(markerIcon, contentDescription = "Attachment type", tint = theme.accentColor, modifier = Modifier.size(24.dp))
                 Text(
                     attachment.fileName,
                     Modifier.padding(start = 10.dp).weight(1f),
@@ -579,15 +602,19 @@ internal fun DefaultAttachment(
         }
         if (attachment.isAudio && resolvedUri != null) {
             val playing = audioPlayer.activeAttachmentId == attachment.id && audioPlayer.isPlaying
-            Text(
-                if (playing) "❚❚" else "▶",
-                color = theme.accentColor,
-                fontSize = 18.sp,
+            val audioIcon = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow
+            Icon(
+                audioIcon,
+                contentDescription = if (playing) "Pause voice message" else "Play voice message",
+                tint = theme.accentContentColor,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 12.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(theme.accentColor)
                     .clickable { audioPlayer.toggle(attachment.id, resolvedUri!!) }
-                    .semantics { contentDescription = if (playing) "Pause voice message" else "Play voice message" },
+                    .padding(6.dp)
             )
         }
         when (val transfer = attachment.transferState) {
@@ -610,13 +637,13 @@ private fun DeliveryStatus(status: DeliveryStatus, theme: ChatTheme, onRetry: ()
     when (status) {
         DeliveryStatus.None -> Unit
         DeliveryStatus.Pending, DeliveryStatus.Sent ->
-            Text("✓", color = theme.outgoingTimestampColor, fontSize = 11.sp)
+            Icon(Icons.Default.Check, contentDescription = "Sent", tint = theme.outgoingTimestampColor, modifier = Modifier.size(14.dp))
         DeliveryStatus.Failed ->
-            Text("!", color = Color(0xFFFF8A80), fontWeight = FontWeight.Bold, modifier = Modifier.clickable(onClick = onRetry))
+            Icon(Icons.Default.Error, contentDescription = "Failed", tint = Color(0xFFFF8A80), modifier = Modifier.size(14.dp).clickable(onClick = onRetry))
         DeliveryStatus.Delivered ->
-            Text("✓✓", color = theme.outgoingTimestampColor, fontSize = 11.sp)
+            Icon(Icons.Default.DoneAll, contentDescription = "Delivered", tint = theme.outgoingTimestampColor, modifier = Modifier.size(14.dp))
         DeliveryStatus.Read ->
-            Text("✓✓", color = theme.readReceiptColor, fontSize = 11.sp)
+            Icon(Icons.Default.DoneAll, contentDescription = "Read", tint = theme.readReceiptColor, modifier = Modifier.size(14.dp))
     }
 }
 
@@ -637,26 +664,51 @@ internal fun DateSeparator(label: String, theme: ChatTheme) {
 @Composable
 internal fun TypingIndicator(label: String, theme: ChatTheme) {
     val transition = rememberInfiniteTransition(label = "typing")
-    val alpha by transition.animateFloat(
-        0.35f,
-        1f,
-        infiniteRepeatable(tween(600), RepeatMode.Reverse),
-        label = "typing-alpha",
+    val dot1Offset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = -6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dot1"
     )
+    val dot2Offset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = -6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(400, delayMillis = 150, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dot2"
+    )
+    val dot3Offset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = -6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(400, delayMillis = 300, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dot3"
+    )
+
     Row(
         Modifier
             .fillMaxWidth()
             .semantics { contentDescription = label },
         horizontalArrangement = Arrangement.Start,
     ) {
-        Text(
-            "•••",
-            color = theme.typingIndicatorTextColor.copy(alpha = alpha),
-            fontSize = 20.sp,
+        Row(
             modifier = Modifier
                 .background(theme.typingIndicatorBubbleColor, RoundedCornerShape(theme.bubbleCornerRadius))
                 .border(1.dp, theme.incomingBubbleBorderColor, RoundedCornerShape(theme.bubbleCornerRadius))
-                .padding(horizontal = 14.dp, vertical = 6.dp),
-        )
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.offset(y = dot1Offset.dp).size(6.dp).background(theme.typingIndicatorTextColor, androidx.compose.foundation.shape.CircleShape))
+            Box(Modifier.offset(y = dot2Offset.dp).size(6.dp).background(theme.typingIndicatorTextColor, androidx.compose.foundation.shape.CircleShape))
+            Box(Modifier.offset(y = dot3Offset.dp).size(6.dp).background(theme.typingIndicatorTextColor, androidx.compose.foundation.shape.CircleShape))
+        }
     }
 }
