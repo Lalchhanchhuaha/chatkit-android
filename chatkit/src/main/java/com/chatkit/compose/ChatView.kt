@@ -31,6 +31,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,6 +55,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,7 +66,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -76,6 +82,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.util.UUID
 
@@ -493,8 +500,10 @@ public fun ChatView(
                     media = pendingMedia,
                     documents = pendingDocuments,
                     theme = theme,
-                    onClear = {
-                        pendingMedia.clear()
+                    onRemoveMedia = { removed ->
+                        pendingMedia.remove(removed)
+                    },
+                    onClearDocuments = {
                         pendingDocuments.clear()
                     },
                 )
@@ -745,26 +754,146 @@ internal fun PendingAttachments(
     media: List<ChatMediaAttachment>,
     documents: List<Uri>,
     theme: ChatTheme,
+    onRemoveMedia: (ChatMediaAttachment) -> Unit,
+    onClearDocuments: () -> Unit,
+) {
+    val context = LocalContext.current
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.composerBarColor)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        items(media, key = { it.id }) { item ->
+            ComposerMediaChip(
+                item = item,
+                theme = theme,
+                onRemove = { onRemoveMedia(item) },
+            )
+        }
+        if (documents.isNotEmpty()) {
+            item(key = "docs") {
+                ComposerDocumentChip(
+                    count = documents.size,
+                    label = if (documents.size == 1)
+                        documents.first().lastPathSegment ?: "Document"
+                    else "${documents.size} documents",
+                    theme = theme,
+                    onClear = onClearDocuments,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComposerMediaChip(
+    item: ChatMediaAttachment,
+    theme: ChatTheme,
+    onRemove: () -> Unit,
+) {
+    val context = LocalContext.current
+    val bitmap by produceState<android.graphics.Bitmap?>(null, item.id) {
+        value = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    context.contentResolver.loadThumbnail(
+                        item.localUri,
+                        android.util.Size(160, 160),
+                        null,
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    android.media.ThumbnailUtils.extractThumbnail(
+                        android.graphics.BitmapFactory.decodeStream(
+                            context.contentResolver.openInputStream(item.localUri)
+                        ),
+                        160, 160,
+                    )
+                }
+            }.getOrNull()
+        }
+    }
+    Box(
+        modifier = Modifier
+            .size(64.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+            .background(theme.thumbnailPlaceholderBackgroundColor),
+    ) {
+        if (bitmap != null) {
+            androidx.compose.foundation.Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        }
+        // Remove button
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(3.dp)
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.55f))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Remove",
+                tint = Color.White,
+                modifier = Modifier.size(11.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposerDocumentChip(
+    count: Int,
+    label: String,
+    theme: ChatTheme,
     onClear: () -> Unit,
 ) {
     Row(
-        Modifier
-            .fillMaxWidth()
-            .background(theme.composerBarColor)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+            .background(theme.attachmentTileBackgroundColor)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        val label = when {
-            media.isNotEmpty() -> "${media.size} media selected"
-            documents.size == 1 -> documents.first().lastPathSegment ?: "Document selected"
-            else -> "${documents.size} documents selected"
-        }
-        Text(label, Modifier.weight(1f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(
-            "×",
-            color = theme.incomingTimestampColor,
-            fontSize = 22.sp,
-            modifier = Modifier.clickable(onClick = onClear).padding(6.dp),
+        Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = null,
+            tint = theme.accentColor,
+            modifier = Modifier.size(16.dp),
         )
+        Text(
+            text = label,
+            color = theme.incomingTextColor,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 120.dp),
+        )
+        Box(
+            modifier = Modifier
+                .size(16.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.15f))
+                .clickable(onClick = onClear),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Remove",
+                tint = theme.incomingTextColor,
+                modifier = Modifier.size(10.dp),
+            )
+        }
     }
 }
