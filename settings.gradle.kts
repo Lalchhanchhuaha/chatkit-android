@@ -23,5 +23,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Chatkit"
-include(":app")
 include(":chatkit")

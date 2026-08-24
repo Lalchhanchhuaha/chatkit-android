@@ -39,11 +39,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.4.4")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.5.0")
 }
 ```
 
-For development snapshots, replace `v1.4.4` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.5.0` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -114,17 +114,18 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ## Build and publish locally
 
 ```shell
-./gradlew :chatkit:testDebugUnitTest :app:assembleDebug
+./gradlew :chatkit:testDebugUnitTest :chatkit:assembleRelease
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.4.4`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.5.0`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.5.0 | iOS-parity media bubbles (image/video grids, voice waveform) and hold-to-record voice composer; tighter bubble/composer sizing |
 | 1.4.4 | iOS-parity delivery ticks (single/double/blue) and attachment picker (Photos/Videos tabs, 4-col grid, document tile) |
 | 1.4.3 | Fix outgoing bubble sizing to match incoming (explicit measured width, iOS-style side spacer) |
 | 1.4.2 | iOS bubble parity: 78% max-width, content-hugging size, inline last-line timestamp/footer, 14dp corners |

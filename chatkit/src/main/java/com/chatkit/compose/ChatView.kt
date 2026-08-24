@@ -70,6 +70,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -144,17 +145,6 @@ public fun ChatView(
     val composerFocusRequester = remember { FocusRequester() }
     val recorder = remember(context) { VoiceRecorder(context.applicationContext) }
     val audioPlayer = remember(context) { AudioPlayerController(context.applicationContext) }
-    val resolvedAttachmentContent: @Composable (ChatAttachment) -> Unit =
-        attachmentContent ?: { attachment ->
-            DefaultAttachment(
-                attachment = attachment,
-                theme = theme,
-                automaticallyLoadsImages = automaticallyLoadsImages,
-                attachmentResolver = attachmentResolver,
-                onCancelUpload = onCancelAttachmentUpload,
-                audioPlayer = audioPlayer,
-            )
-        }
 
     var draft by remember { mutableStateOf("") }
     var replyingTo by remember { mutableStateOf<ChatMessage?>(null) }
@@ -167,7 +157,9 @@ public fun ChatView(
     var isVoiceRecordingLocked by remember { mutableStateOf(false) }
     var isVoiceGestureActive by remember { mutableStateOf(false) }
     var isVoiceLockArmed by remember { mutableStateOf(false) }
+    var isVoiceCancelArmed by remember { mutableStateOf(false) }
     var voiceDragOffset by remember { mutableFloatStateOf(0f) }
+    var voiceVerticalDragOffset by remember { mutableFloatStateOf(0f) }
 
     var isViewingNewest by remember { mutableStateOf(true) }
     var unreadIncomingCount by remember { mutableIntStateOf(0) }
@@ -247,6 +239,24 @@ public fun ChatView(
             multiDocumentPicker.launch(mimeArray)
         } else {
             singleDocumentPicker.launch(mimeArray)
+        }
+    }
+
+    val cameraPermission = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val uri = cameraCaptureUri
+        if (granted && uri != null) cameraPicker.launch(uri)
+    }
+
+    fun launchCameraCapture() {
+        val uri = cameraCaptureUri ?: return
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            runCatching { cameraPicker.launch(uri) }
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -334,7 +344,9 @@ public fun ChatView(
         isVoiceRecordingLocked = false
         isVoiceGestureActive = false
         isVoiceLockArmed = false
+        isVoiceCancelArmed = false
         voiceDragOffset = 0f
+        voiceVerticalDragOffset = 0f
     }
 
     fun cancelVoiceRecording() {
@@ -343,7 +355,9 @@ public fun ChatView(
         isVoiceRecordingLocked = false
         isVoiceGestureActive = false
         isVoiceLockArmed = false
+        isVoiceCancelArmed = false
         voiceDragOffset = 0f
+        voiceVerticalDragOffset = 0f
         onVoiceRecordingCancelled()
     }
 
@@ -406,6 +420,9 @@ public fun ChatView(
     val canSend = draft.isNotBlank() || pendingMedia.isNotEmpty() || pendingDocuments.isNotEmpty()
     val isVoiceRecorderActive = isRecording || isVoiceGestureActive
     val voiceDuration = rememberVoiceDurationMillis(isRecording, recorder)
+    val voiceLevel = rememberVoiceLevel(isRecording, recorder)
+    val density = LocalDensity.current
+    val lockPadLiftPx = voiceLockPadLiftDp(voiceVerticalDragOffset, density)
 
     DisposableEffect(recorder) {
         onDispose {
@@ -419,38 +436,56 @@ public fun ChatView(
             .fillMaxSize()
             .background(theme.backgroundColor),
     ) {
-        MessageList(
-            messages = displayedMessages,
-            listState = listState,
-            showsSender = showsSender,
-            theme = theme,
-            isTyping = isTyping,
-            typingIndicatorText = typingIndicatorText,
-            isViewingNewest = isViewingNewest,
-            unreadIncomingCount = unreadIncomingCount,
-            onTranscriptTap = ::dismissInputPanels,
-            onMessageRetry = onMessageRetry,
-            modificationWindowMillis = modificationWindowMillis,
-            onEditMessage = onEditMessage,
-            onDeleteMessage = onDeleteMessage,
-            onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
-                { message ->
-                    replyingTo = message
-                    onReplyToMessage(message)
-                }
-            } else {
-                null
-            },
-            onLoadPreviousMessages = onLoadPreviousMessages,
-            loadPreviousThreshold = loadPreviousThreshold,
-            onUnreadIncomingCountChanged = { unreadIncomingCount = it },
-            onNewestVisibilityChanged = { isViewingNewest = it },
-            scrollToNewestRequest = scrollToNewestRequest,
-            onJumpToNewest = { scrollToNewestRequest += 1 },
-            attachmentContent = resolvedAttachmentContent,
-            deliveryStatusContent = deliveryStatusContent,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            MessageList(
+                messages = displayedMessages,
+                listState = listState,
+                showsSender = showsSender,
+                theme = theme,
+                isTyping = isTyping,
+                typingIndicatorText = typingIndicatorText,
+                isViewingNewest = isViewingNewest,
+                unreadIncomingCount = unreadIncomingCount,
+                onTranscriptTap = ::dismissInputPanels,
+                onMessageRetry = onMessageRetry,
+                modificationWindowMillis = modificationWindowMillis,
+                onEditMessage = onEditMessage,
+                onDeleteMessage = onDeleteMessage,
+                onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
+                    { message ->
+                        replyingTo = message
+                        onReplyToMessage(message)
+                    }
+                } else {
+                    null
+                },
+                onLoadPreviousMessages = onLoadPreviousMessages,
+                loadPreviousThreshold = loadPreviousThreshold,
+                onUnreadIncomingCountChanged = { unreadIncomingCount = it },
+                onNewestVisibilityChanged = { isViewingNewest = it },
+                scrollToNewestRequest = scrollToNewestRequest,
+                onJumpToNewest = { scrollToNewestRequest += 1 },
+                attachmentContent = attachmentContent,
+                automaticallyLoadsImages = automaticallyLoadsImages,
+                attachmentResolver = attachmentResolver,
+                onCancelAttachmentUpload = onCancelAttachmentUpload,
+                audioPlayer = audioPlayer,
+                deliveryStatusContent = deliveryStatusContent,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (isVoiceRecorderActive && !isVoiceRecordingLocked) {
+                VoiceSlideToLockPad(
+                    theme = theme,
+                    isLockArmed = isVoiceLockArmed,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(
+                            end = 14.dp,
+                            bottom = 12.dp + with(density) { lockPadLiftPx.toDp() },
+                        ),
+                )
+            }
+        }
 
         // Smart VC detail layout: only the natural-height footer receives bottom insets.
         // The weighted transcript yields space as the keyboard or attachment panel grows.
@@ -494,115 +529,165 @@ public fun ChatView(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.Bottom,
                 ) {
-                    ComposerButton(
-                        icon = if (isAttachmentPickerPresented) Icons.Default.Close else Icons.Default.Add,
-                        contentDescription = if (isAttachmentPickerPresented) {
-                            "Close attachment picker"
-                        } else {
-                            "Add attachment"
-                        },
-                        enabled = !isVoiceRecorderActive,
-                        theme = theme,
-                    ) {
-                        if (isAttachmentPickerPresented) {
-                            dismissAttachmentPicker()
-                        } else {
-                            presentAttachmentPicker()
-                        }
-                    }
-                    if (cameraCaptureUri != null) {
-                        Spacer(Modifier.width(8.dp))
-                        ComposerButton(
-                            icon = Icons.Default.CameraAlt,
-                            contentDescription = "Open camera",
-                            enabled = !isVoiceRecorderActive,
-                            theme = theme,
-                        ) {
-                            dismissAttachmentPicker()
-                            cameraPicker.launch(cameraCaptureUri)
-                        }
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 44.dp, max = 120.dp)
-                            .clip(ComposerFieldShape)
-                            .border(1.dp, theme.composerFieldBorderColor, ComposerFieldShape)
-                            .background(theme.composerFieldBackground, ComposerFieldShape)
-                            .padding(horizontal = 16.dp, vertical = 11.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        BasicTextField(
-                            value = draft,
-                            onValueChange = { draft = it; onTyping() },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(composerFocusRequester)
-                                .onFocusChanged { focus ->
-                                    if (focus.isFocused && isAttachmentPickerPresented) {
-                                        isAttachmentPickerPresented = false
+                    // Single weighted leading slot keeps the trailing mic identity stable.
+                    Box(modifier = Modifier.weight(1f)) {
+                        when {
+                            isVoiceRecordingLocked -> {
+                                LockedVoiceRecordingStatus(
+                                    theme = theme,
+                                    durationMillis = voiceDuration,
+                                    level = voiceLevel,
+                                    onDiscard = ::cancelVoiceRecording,
+                                    onSend = ::finishVoiceRecording,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            isVoiceRecorderActive -> {
+                                UnlockedVoiceRecordingStatus(
+                                    theme = theme,
+                                    durationMillis = voiceDuration,
+                                    level = voiceLevel,
+                                    isCancelArmed = isVoiceCancelArmed,
+                                    dragOffsetX = voiceDragOffset,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(end = 10.dp),
+                                )
+                            }
+                            else -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.Bottom,
+                                ) {
+                                    ComposerButton(
+                                        icon = if (isAttachmentPickerPresented) {
+                                            Icons.Default.Close
+                                        } else {
+                                            Icons.Default.Add
+                                        },
+                                        contentDescription = if (isAttachmentPickerPresented) {
+                                            "Close attachment picker"
+                                        } else {
+                                            "Add attachment"
+                                        },
+                                        enabled = true,
+                                        theme = theme,
+                                    ) {
+                                        if (isAttachmentPickerPresented) {
+                                            dismissAttachmentPicker()
+                                        } else {
+                                            presentAttachmentPicker()
+                                        }
                                     }
-                                },
-                            enabled = !isVoiceRecorderActive,
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = theme.incomingTextColor),
-                            cursorBrush = SolidColor(theme.accentColor),
-                            keyboardOptions = KeyboardOptions(
-                                capitalization = KeyboardCapitalization.Sentences,
-                            ),
-                            maxLines = 4,
-                            decorationBox = { field ->
-                                Box(contentAlignment = Alignment.CenterStart) {
-                                    if (draft.isEmpty()) {
-                                        Text(
-                                            text = composerPlaceholder,
-                                            color = theme.incomingTimestampColor,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
+                                    if (cameraCaptureUri != null) {
+                                        Spacer(Modifier.width(8.dp))
+                                        ComposerButton(
+                                            icon = Icons.Default.CameraAlt,
+                                            contentDescription = "Open camera",
+                                            enabled = true,
+                                            theme = theme,
+                                        ) {
+                                            dismissAttachmentPicker()
+                                            launchCameraCapture()
+                                        }
+                                    }
+                                    Spacer(Modifier.width(10.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 36.dp, max = 100.dp)
+                                            .clip(ComposerFieldShape)
+                                            .border(
+                                                1.dp,
+                                                theme.composerFieldBorderColor,
+                                                ComposerFieldShape,
+                                            )
+                                            .background(
+                                                theme.composerFieldBackground,
+                                                ComposerFieldShape,
+                                            )
+                                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                                        contentAlignment = Alignment.CenterStart,
+                                    ) {
+                                        BasicTextField(
+                                            value = draft,
+                                            onValueChange = { draft = it; onTyping() },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .focusRequester(composerFocusRequester)
+                                                .onFocusChanged { focus ->
+                                                    if (focus.isFocused && isAttachmentPickerPresented) {
+                                                        isAttachmentPickerPresented = false
+                                                    }
+                                                },
+                                            enabled = true,
+                                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                                color = theme.incomingTextColor,
+                                                fontSize = 14.sp,
+                                            ),
+                                            cursorBrush = SolidColor(theme.accentColor),
+                                            keyboardOptions = KeyboardOptions(
+                                                capitalization = KeyboardCapitalization.Sentences,
+                                            ),
+                                            maxLines = 4,
+                                            decorationBox = { field ->
+                                                Box(contentAlignment = Alignment.CenterStart) {
+                                                    if (draft.isEmpty()) {
+                                                        Text(
+                                                            text = composerPlaceholder,
+                                                            color = theme.incomingTimestampColor,
+                                                            fontSize = 14.sp,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
+                                                    }
+                                                    field()
+                                                }
+                                            },
                                         )
                                     }
-                                    field()
+                                    Spacer(Modifier.width(10.dp))
                                 }
-                            },
-                        )
+                            }
+                        }
                     }
-                    Spacer(Modifier.width(10.dp))
-                    if (canSend || !showsVoiceRecorder) {
-                        ComposerButton(
-                            icon = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            enabled = canSend,
-                            theme = theme,
-                            onClick = ::submit,
-                        )
-                    } else {
-                        VoiceMicButton(
-                            theme = theme,
-                            enabled = true,
-                            isActive = isVoiceRecorderActive,
-                            onGestureActiveChanged = { isVoiceGestureActive = it },
-                            onLockArmedChanged = { isVoiceLockArmed = it },
-                            onDragOffsetChanged = { voiceDragOffset = it },
-                            onPressStart = ::ensureRecordingPermissionAndStart,
-                            onCancel = ::cancelVoiceRecording,
-                            onLock = { isVoiceRecordingLocked = true },
-                            onFinish = ::finishVoiceRecording,
-                        )
+                    if (!isVoiceRecordingLocked) {
+                        if (canSend && !isVoiceRecorderActive) {
+                            ComposerButton(
+                                icon = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                enabled = true,
+                                theme = theme,
+                                onClick = ::submit,
+                            )
+                        } else if (showsVoiceRecorder || isVoiceRecorderActive) {
+                            VoiceMicButton(
+                                theme = theme,
+                                enabled = true,
+                                isActive = isVoiceRecorderActive,
+                                onGestureActiveChanged = { isVoiceGestureActive = it },
+                                onCancelArmedChanged = { isVoiceCancelArmed = it },
+                                onLockArmedChanged = { isVoiceLockArmed = it },
+                                onDragOffsetChanged = { voiceDragOffset = it },
+                                onVerticalDragOffsetChanged = { voiceVerticalDragOffset = it },
+                                onPressStart = ::ensureRecordingPermissionAndStart,
+                                onCancel = ::cancelVoiceRecording,
+                                onLock = { isVoiceRecordingLocked = true },
+                                onFinish = ::finishVoiceRecording,
+                            )
+                        } else {
+                            ComposerButton(
+                                icon = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                enabled = false,
+                                theme = theme,
+                                onClick = ::submit,
+                            )
+                        }
                     }
-                }
-                if (isVoiceRecorderActive) {
-                    VoiceRecordingOverlay(
-                        theme = theme,
-                        durationMillis = voiceDuration,
-                        isLocked = isVoiceRecordingLocked,
-                        isLockArmed = isVoiceLockArmed,
-                        dragOffsetX = voiceDragOffset,
-                        onDiscard = ::cancelVoiceRecording,
-                        onSend = ::finishVoiceRecording,
-                    )
                 }
             }
         }
@@ -705,7 +790,7 @@ internal fun ComposerButton(
 ) {
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(36.dp)
             .clip(CircleShape)
             .background(theme.composerButtonBackgroundColor)
             .semantics {
@@ -719,12 +804,12 @@ internal fun ComposerButton(
             imageVector = icon,
             contentDescription = null,
             tint = theme.composerIconColor.copy(alpha = if (enabled) 1f else 0.45f),
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(18.dp),
         )
     }
 }
 
-private val ComposerFieldShape = RoundedCornerShape(22.dp)
+private val ComposerFieldShape = RoundedCornerShape(18.dp)
 
 @Composable
 internal fun PendingAttachments(

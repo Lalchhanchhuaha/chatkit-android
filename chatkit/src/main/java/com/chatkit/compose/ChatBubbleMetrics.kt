@@ -38,7 +38,7 @@ internal data class WhatsAppBubbleTextLayout(
 )
 
 internal object WhatsAppBubbleTextLayoutCalculator {
-    private const val FooterGapPx = 8f
+    private const val FooterGapPx = 14f
 
     fun measure(
         naturalTextWidthPx: Float,

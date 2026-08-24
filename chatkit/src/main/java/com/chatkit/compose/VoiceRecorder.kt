@@ -16,6 +16,17 @@ internal class VoiceRecorder(private val context: Context) {
     val durationMillis: Long
         get() = if (isRecording) (System.currentTimeMillis() - startedAt).coerceAtLeast(0L) else 0L
 
+    /**
+     * Normalized meter level `0.08…1` matching iOS ChatKit (`linearPower * 4`, floor 0.08).
+     * Uses [MediaRecorder.getMaxAmplitude] (0…32767).
+     */
+    val meterLevel: Float
+        get() {
+            val amp = runCatching { recorder?.maxAmplitude ?: 0 }.getOrDefault(0)
+            val normalized = (amp / 32767f).coerceIn(0f, 1f)
+            return maxOf(0.08f, minOf(1f, normalized * 4f))
+        }
+
     fun start(): Boolean = runCatching {
         val file = File.createTempFile("chatkit-voice-", ".m4a", context.cacheDir)
         val mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

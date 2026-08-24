@@ -1,6 +1,5 @@
 package com.chatkit.compose
 
-import android.graphics.BitmapFactory
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -8,7 +7,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,7 +38,7 @@ import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -48,21 +46,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.Audiotrack
-import androidx.compose.material.icons.filled.PlayCircleFilled
-import androidx.compose.material3.Icon
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -71,11 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.ui.platform.LocalDensity
@@ -92,10 +76,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withContext
 import java.time.Instant
 import kotlin.math.roundToInt
 
@@ -131,7 +113,11 @@ internal fun MessageList(
     onNewestVisibilityChanged: (Boolean) -> Unit,
     scrollToNewestRequest: Int,
     onJumpToNewest: () -> Unit,
-    attachmentContent: @Composable (ChatAttachment) -> Unit,
+    attachmentContent: (@Composable (ChatAttachment) -> Unit)?,
+    automaticallyLoadsImages: Boolean = true,
+    attachmentResolver: AttachmentResolver = AttachmentResolver.None,
+    onCancelAttachmentUpload: (ChatAttachment) -> Unit = {},
+    audioPlayer: AudioPlayerController? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -244,6 +230,10 @@ internal fun MessageList(
                                 { reply(item.message) }
                             },
                             attachmentContent = attachmentContent,
+                            automaticallyLoadsImages = automaticallyLoadsImages,
+                            attachmentResolver = attachmentResolver,
+                            onCancelAttachmentUpload = onCancelAttachmentUpload,
+                            audioPlayer = audioPlayer,
                             deliveryStatusContent = deliveryStatusContent,
                         )
                     }
@@ -340,11 +330,15 @@ internal fun MessageBubble(
     onEditMessage: ((String, String) -> Unit)?,
     onDeleteMessage: ((String) -> Unit)?,
     onReply: (() -> Unit)?,
-    attachmentContent: @Composable (ChatAttachment) -> Unit,
+    attachmentContent: (@Composable (ChatAttachment) -> Unit)?,
+    automaticallyLoadsImages: Boolean = true,
+    attachmentResolver: AttachmentResolver = AttachmentResolver.None,
+    onCancelAttachmentUpload: (ChatAttachment) -> Unit = {},
+    audioPlayer: AudioPlayerController? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
 ) {
     val incoming = message.isIncoming
-    val corner = if (theme.bubbleCornerRadius == Dp.Unspecified) 14.dp else theme.bubbleCornerRadius
+    val corner = if (theme.bubbleCornerRadius == Dp.Unspecified) 12.dp else theme.bubbleCornerRadius
     val bubbleShape = messageBubbleShape(incoming, corner)
     var showActions by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
@@ -387,8 +381,8 @@ internal fun MessageBubble(
 
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val maxBubble = ChatBubbleMetrics.maxBubbleWidth(maxWidth, theme.messageMaximumWidth)
-        // Match iOS content insets (leading 10, trailing 12).
-        val horizontalPadding = 22.dp
+        // Match iOS content insets (leading 8, trailing 10).
+        val horizontalPadding = 18.dp
         val captionLayout = remember(
             trimmedText,
             hasText,
@@ -460,6 +454,7 @@ internal fun MessageBubble(
                             if (incoming) theme.incomingBubbleColor else theme.outgoingBubbleColor,
                             bubbleShape,
                         )
+                        .clip(bubbleShape)
                         .then(
                             if (incoming) {
                                 Modifier.border(1.dp, theme.incomingBubbleBorderColor, bubbleShape)
@@ -478,18 +473,16 @@ internal fun MessageBubble(
                                     }
                                 },
                             )
-                        }
-                        .padding(
-                            start = 10.dp,
-                            end = 12.dp,
-                            top = if (hasMedia && !hasText) 4.dp else 8.dp,
-                            bottom = 6.dp,
-                        ),
+                        },
                 ) {
+                    val hasMediaAttachments = message.attachments.any {
+                        it.isImage || it.isVideo || it.isAudio
+                    }
                     if (message.replyToMessageId != null) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .padding(start = 8.dp, end = 8.dp, top = 6.dp)
                                 .background(Color.Black.copy(alpha = 0.07f), RoundedCornerShape(8.dp))
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
                         ) {
@@ -507,38 +500,75 @@ internal fun MessageBubble(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Spacer(Modifier.height(6.dp))
                     }
-                    message.attachments.forEach { attachment ->
-                        attachmentContent(attachment)
-                        if (hasText) Spacer(Modifier.height(6.dp))
-                    }
-                    if (hasText && captionLayout != null) {
-                        InlineTimestampCaption(
-                            text = trimmedText,
-                            placeholder = captionLayout.placeholder,
-                            timeText = timeText,
-                            isEdited = message.isEdited,
-                            showsDelivery = showsDelivery,
-                            deliveryStatus = message.deliveryStatus,
-                            textColor = textColor,
-                            timestampColor = timestampColor,
-                            theme = theme,
-                            onRetry = onRetry,
-                            deliveryStatusContent = deliveryStatusContent,
-                        )
-                    } else if (!hasText) {
-                        MessageTimestampFooter(
-                            timeText = timeText,
-                            isEdited = message.isEdited,
-                            showsDelivery = showsDelivery,
-                            deliveryStatus = message.deliveryStatus,
-                            timestampColor = timestampColor,
-                            theme = theme,
-                            onRetry = onRetry,
-                            deliveryStatusContent = deliveryStatusContent,
-                            modifier = Modifier.align(Alignment.End),
-                        )
+                    if (attachmentContent != null) {
+                        Column(
+                            modifier = Modifier.padding(
+                                start = 8.dp,
+                                end = 10.dp,
+                                top = if (hasMedia && !hasText) 4.dp else 6.dp,
+                                bottom = 5.dp,
+                            ),
+                        ) {
+                            message.attachments.forEach { attachment ->
+                                attachmentContent(attachment)
+                                if (hasText) Spacer(Modifier.height(6.dp))
+                            }
+                            MessageBubbleCaptionOrFooter(
+                                hasText = hasText,
+                                captionLayout = captionLayout,
+                                trimmedText = trimmedText,
+                                timeText = timeText,
+                                isEdited = message.isEdited,
+                                showsDelivery = showsDelivery,
+                                deliveryStatus = message.deliveryStatus,
+                                textColor = textColor,
+                                timestampColor = timestampColor,
+                                theme = theme,
+                                onRetry = onRetry,
+                                deliveryStatusContent = deliveryStatusContent,
+                            )
+                        }
+                    } else {
+                        if (message.attachments.isNotEmpty() && audioPlayer != null) {
+                            MessageAttachmentsContent(
+                                message = message,
+                                theme = theme,
+                                maxBubbleWidth = maxBubble,
+                                automaticallyLoadsImages = automaticallyLoadsImages,
+                                attachmentResolver = attachmentResolver,
+                                onCancelUpload = onCancelAttachmentUpload,
+                                audioPlayer = audioPlayer,
+                            )
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp)
+                                .padding(
+                                    top = when {
+                                        !hasMediaAttachments && message.replyToMessageId == null -> 6.dp
+                                        hasText || !hasMediaAttachments -> 5.dp
+                                        else -> 2.dp
+                                    },
+                                    bottom = 5.dp,
+                                ),
+                        ) {
+                            MessageBubbleCaptionOrFooter(
+                                hasText = hasText,
+                                captionLayout = captionLayout,
+                                trimmedText = trimmedText,
+                                timeText = timeText,
+                                isEdited = message.isEdited,
+                                showsDelivery = showsDelivery,
+                                deliveryStatus = message.deliveryStatus,
+                                textColor = textColor,
+                                timestampColor = timestampColor,
+                                theme = theme,
+                                onRetry = onRetry,
+                                deliveryStatusContent = deliveryStatusContent,
+                            )
+                        }
                     }
                     DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
                         if (onReply != null) {
@@ -591,6 +621,52 @@ private data class MeasuredBubbleCaption(
     val placeholder: String,
 )
 
+@Composable
+private fun MessageBubbleCaptionOrFooter(
+    hasText: Boolean,
+    captionLayout: MeasuredBubbleCaption?,
+    trimmedText: String,
+    timeText: String,
+    isEdited: Boolean,
+    showsDelivery: Boolean,
+    deliveryStatus: DeliveryStatus,
+    textColor: Color,
+    timestampColor: Color,
+    theme: ChatTheme,
+    onRetry: () -> Unit,
+    deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)?,
+) {
+    if (hasText && captionLayout != null) {
+        InlineTimestampCaption(
+            text = trimmedText,
+            placeholder = captionLayout.placeholder,
+            timeText = timeText,
+            isEdited = isEdited,
+            showsDelivery = showsDelivery,
+            deliveryStatus = deliveryStatus,
+            textColor = textColor,
+            timestampColor = timestampColor,
+            theme = theme,
+            onRetry = onRetry,
+            deliveryStatusContent = deliveryStatusContent,
+        )
+    } else if (!hasText) {
+        Box(Modifier.fillMaxWidth()) {
+            MessageTimestampFooter(
+                timeText = timeText,
+                isEdited = isEdited,
+                showsDelivery = showsDelivery,
+                deliveryStatus = deliveryStatus,
+                timestampColor = timestampColor,
+                theme = theme,
+                onRetry = onRetry,
+                deliveryStatusContent = deliveryStatusContent,
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+        }
+    }
+}
+
 /**
  * Builds a transparent trailing placeholder that matches the real footer width as closely
  * as possible (actual time / Edited text + tick slots). Avoids figure-space runs that are
@@ -602,12 +678,12 @@ private fun footerPlaceholder(
     showsDelivery: Boolean,
     deliveryStatus: DeliveryStatus,
 ): String = buildString {
-    // Small gap between body and footer (iOS uses two NBSPs).
-    append("\u00A0\u00A0")
+    // Gap between body and footer (extra NBSPs keep timestamp clear of text).
+    append("\u00A0\u00A0\u00A0\u00A0")
     if (isEdited) append("Edited ")
     append(timeText)
     if (showsDelivery) {
-        // Approximate tick / double-tick icon width at 11sp.
+        // Approximate tick / double-tick icon width at 10sp.
         append(
             when (deliveryStatus) {
                 DeliveryStatus.Delivered, DeliveryStatus.Read -> "\u2007\u2007\u2007\u2007"
@@ -629,13 +705,13 @@ private fun measureBubbleCaption(
     density: androidx.compose.ui.unit.Density,
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
 ): MeasuredBubbleCaption = with(density) {
-    val messageStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 22.sp)
+    val messageStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, lineHeight = 19.sp)
     val maxTextWidth = (maxBubbleWidth - horizontalPadding).coerceAtLeast(40.dp)
     val maxTextWidthPx = maxTextWidth.toPx().toInt().coerceAtLeast(1)
     val placeholder = footerPlaceholder(timeText, isEdited, showsDelivery, deliveryStatus)
     val annotated = androidx.compose.ui.text.buildAnnotatedString {
         append(text)
-        withStyle(SpanStyle(color = Color.Transparent, fontSize = 11.sp)) {
+        withStyle(SpanStyle(color = Color.Transparent, fontSize = 10.sp)) {
             append(placeholder)
         }
     }
@@ -676,13 +752,13 @@ private fun measureBubbleCaption(
                 placeholder,
                 spanStyles = listOf(
                     androidx.compose.ui.text.AnnotatedString.Range(
-                        SpanStyle(fontSize = 11.sp),
+                        SpanStyle(fontSize = 10.sp),
                         0,
                         placeholder.length,
                     ),
                 ),
             ),
-            style = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
+            style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp),
             softWrap = false,
             maxLines = 1,
             constraints = Constraints(maxWidth = Constraints.Infinity),
@@ -698,7 +774,7 @@ private fun measureBubbleCaption(
             wrappedTextWidthPx = bodyOnly.size.width.toFloat(),
             lastLineWidthPx = lastLineWidth,
             textHeightPx = bodyOnly.size.height.toFloat(),
-            lineHeightPx = 22.sp.toPx(),
+            lineHeightPx = 19.sp.toPx(),
             maxTextWidthPx = maxTextWidthPx.toFloat(),
             footerWidthPx = footerWidthPx,
         )
@@ -737,14 +813,14 @@ private fun InlineTimestampCaption(
 ) {
     val messageStyle = androidx.compose.ui.text.TextStyle(
         color = textColor,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
+        fontSize = 14.sp,
+        lineHeight = 19.sp,
     )
     Box(Modifier.fillMaxWidth()) {
         Text(
             text = buildAnnotatedString {
                 append(text)
-                withStyle(SpanStyle(color = Color.Transparent, fontSize = 11.sp)) {
+                withStyle(SpanStyle(color = Color.Transparent, fontSize = 10.sp)) {
                     append(placeholder)
                 }
             },
@@ -783,9 +859,9 @@ private fun MessageTimestampFooter(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         if (isEdited) {
-            Text("Edited", color = timestampColor, fontSize = 11.sp)
+            Text("Edited", color = timestampColor, fontSize = 10.sp)
         }
-        Text(timeText, color = timestampColor, fontSize = 11.sp)
+        Text(timeText, color = timestampColor, fontSize = 10.sp)
         if (showsDelivery) {
             if (deliveryStatusContent != null) {
                 deliveryStatusContent(deliveryStatus, onRetry)
@@ -804,108 +880,6 @@ private fun messageBubbleShape(incoming: Boolean, radius: Dp): RoundedCornerShap
         bottomStart = if (incoming) 0.dp else radius,
         bottomEnd = if (incoming) radius else 0.dp,
     )
-
-@Composable
-internal fun DefaultAttachment(
-    attachment: ChatAttachment,
-    theme: ChatTheme,
-    automaticallyLoadsImages: Boolean = true,
-    attachmentResolver: AttachmentResolver = AttachmentResolver.None,
-    onCancelUpload: (ChatAttachment) -> Unit = {},
-    audioPlayer: AudioPlayerController,
-) {
-    val context = LocalContext.current
-    val resolvedUri by produceState<android.net.Uri?>(attachment.localUri, attachment.id, automaticallyLoadsImages) {
-        val local = attachment.localUri
-        val available = runCatching { attachmentResolver.isAvailableLocally(attachment) }.getOrDefault(false)
-        val provided = if (automaticallyLoadsImages || available || !attachment.isImage) {
-            runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
-        } else null
-        value = when {
-            local != null -> local
-            provided != null && (automaticallyLoadsImages || available || !attachment.isImage) -> provided
-            else -> null
-        }
-    }
-    val posterUri by produceState<android.net.Uri?>(attachment.posterUri, attachment.id) {
-        value = if (attachment.isVideo) runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull() else null
-    }
-    val displayUri = resolvedUri ?: posterUri
-    val bitmap by produceState<ImageBitmap?>(null, displayUri) {
-        value = if (displayUri != null && (attachment.isImage || attachment.isVideo)) {
-            withContext(Dispatchers.IO) {
-                runCatching {
-                    context.contentResolver.openInputStream(displayUri)
-                        .use { BitmapFactory.decodeStream(it) }
-                        ?.asImageBitmap()
-                }.getOrNull()
-            }
-        } else {
-            null
-        }
-    }
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(if (bitmap != null) 180.dp else 56.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(theme.thumbnailPlaceholderBackgroundColor),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (bitmap != null) {
-            Image(bitmap!!, attachment.fileName, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            if (attachment.isVideo) {
-                Icon(Icons.Default.PlayCircleFilled, contentDescription = "Play Video", tint = Color.White, modifier = Modifier.size(48.dp))
-            }
-        } else {
-            val markerIcon = when {
-                attachment.isVideo -> Icons.Default.PlayArrow
-                attachment.isAudio -> Icons.Default.Audiotrack
-                attachment.isImage -> Icons.Default.Image
-                else -> Icons.Default.InsertDriveFile
-            }
-            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(markerIcon, contentDescription = "Attachment type", tint = theme.accentColor, modifier = Modifier.size(24.dp))
-                Text(
-                    attachment.fileName,
-                    Modifier.padding(start = 10.dp).weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    color = theme.incomingTextColor,
-                )
-            }
-        }
-        if (attachment.isAudio && resolvedUri != null) {
-            val playing = audioPlayer.activeAttachmentId == attachment.id && audioPlayer.isPlaying
-            val audioIcon = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow
-            Icon(
-                audioIcon,
-                contentDescription = if (playing) "Pause voice message" else "Play voice message",
-                tint = theme.accentContentColor,
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 12.dp)
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(theme.accentColor)
-                    .clickable { audioPlayer.toggle(attachment.id, resolvedUri!!) }
-                    .padding(6.dp)
-            )
-        }
-        when (val transfer = attachment.transferState) {
-            is TransferState.Uploading -> Box(Modifier.clickable { onCancelUpload(attachment) }) {
-                CircularProgressIndicator(
-                    progress = { transfer.progress.coerceIn(0f, 1f) },
-                    modifier = Modifier.size(34.dp).semantics { contentDescription = "Cancel upload" },
-                    color = theme.accentColor,
-                )
-            }
-            TransferState.Failed ->
-                Text("Upload failed", color = Color(0xFFB3261E), fontSize = 12.sp)
-            TransferState.Uploaded -> Unit
-        }
-    }
-}
 
 @Composable
 private fun DeliveryStatus(status: DeliveryStatus, theme: ChatTheme, onRetry: () -> Unit) {
@@ -937,11 +911,12 @@ internal fun DateSeparator(label: String, theme: ChatTheme) {
  */
 @Composable
 internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
+    val corner = if (theme.bubbleCornerRadius == Dp.Unspecified) 12.dp else theme.bubbleCornerRadius
     val bubbleShape = RoundedCornerShape(
-        topStart = theme.bubbleCornerRadius,
-        topEnd = theme.bubbleCornerRadius,
+        topStart = corner,
+        topEnd = corner,
         bottomStart = 0.dp, // tail — matches incoming message shape
-        bottomEnd = theme.bubbleCornerRadius,
+        bottomEnd = corner,
     )
     val transition = rememberInfiniteTransition(label = "typing")
     val dot1Alpha by transition.animateFloat(
@@ -973,7 +948,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
     )
     val dot1Offset by transition.animateFloat(
         initialValue = 0f,
-        targetValue = -5f,
+        targetValue = -3f,
         animationSpec = infiniteRepeatable(
             animation = tween(500, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -982,7 +957,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
     )
     val dot2Offset by transition.animateFloat(
         initialValue = 0f,
-        targetValue = -5f,
+        targetValue = -3f,
         animationSpec = infiniteRepeatable(
             animation = tween(500, delayMillis = 160, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -991,7 +966,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
     )
     val dot3Offset by transition.animateFloat(
         initialValue = 0f,
-        targetValue = -5f,
+        targetValue = -3f,
         animationSpec = infiniteRepeatable(
             animation = tween(500, delayMillis = 320, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -1009,14 +984,14 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
             modifier = Modifier
                 .background(theme.typingIndicatorBubbleColor, bubbleShape)
                 .border(0.5.dp, theme.incomingBubbleBorderColor, bubbleShape)
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 Modifier
                     .offset(y = dot1Offset.dp)
-                    .size(8.dp)
+                    .size(5.dp)
                     .background(
                         theme.typingIndicatorTextColor.copy(alpha = dot1Alpha),
                         CircleShape,
@@ -1025,7 +1000,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
             Box(
                 Modifier
                     .offset(y = dot2Offset.dp)
-                    .size(8.dp)
+                    .size(5.dp)
                     .background(
                         theme.typingIndicatorTextColor.copy(alpha = dot2Alpha),
                         CircleShape,
@@ -1034,7 +1009,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
             Box(
                 Modifier
                     .offset(y = dot3Offset.dp)
-                    .size(8.dp)
+                    .size(5.dp)
                     .background(
                         theme.typingIndicatorTextColor.copy(alpha = dot3Alpha),
                         CircleShape,

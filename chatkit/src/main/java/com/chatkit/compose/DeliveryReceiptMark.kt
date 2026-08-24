@@ -18,7 +18,8 @@ import kotlin.math.min
 
 /**
  * WhatsApp-style delivery ticks matching iOS ChatKit `DeliveryReceiptMark`:
- * - Pending / Sent → single tick (muted timestamp color)
+ * - Pending / sending → clock
+ * - Sent → single tick (muted timestamp color)
  * - Delivered → double tick (muted)
  * - Read → double tick (blue / [ChatTheme.readReceiptColor])
  * - Failed → error mark
@@ -30,8 +31,7 @@ internal fun DeliveryReceiptMark(
     timestampColor: Color,
     onRetry: () -> Unit = {},
 ) {
-    val displayed = status.displayed
-    when (displayed) {
+    when (status) {
         DeliveryStatus.None -> Unit
         DeliveryStatus.Failed ->
             Icon(
@@ -42,7 +42,12 @@ internal fun DeliveryReceiptMark(
                     .size(16.dp)
                     .clickable(onClick = onRetry),
             )
-        DeliveryStatus.Pending, DeliveryStatus.Sent ->
+        DeliveryStatus.Pending ->
+            ClockCanvas(
+                color = timestampColor,
+                contentDescription = "Sending",
+            )
+        DeliveryStatus.Sent ->
             TickCanvas(
                 doubleTick = false,
                 color = timestampColor,
@@ -66,6 +71,24 @@ internal fun DeliveryReceiptMark(
 /** Pending displays as Sent (single tick), matching iOS `displayedDeliveryStatus`. */
 internal val DeliveryStatus.displayed: DeliveryStatus
     get() = displayedDeliveryStatus
+
+@Composable
+private fun ClockCanvas(
+    color: Color,
+    contentDescription: String,
+) {
+    Canvas(
+        modifier = Modifier
+            .size(18.dp)
+            .semantics { this.contentDescription = contentDescription },
+    ) {
+        val radius = size.minDimension / 2f - 1.6f
+        val center = Offset(size.width / 2f, size.height / 2f)
+        drawCircle(color = color, radius = radius, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.6f))
+        drawLine(color, center, Offset(center.x, center.y - radius * 0.45f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+        drawLine(color, center, Offset(center.x + radius * 0.35f, center.y + radius * 0.15f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+    }
+}
 
 @Composable
 private fun TickCanvas(
