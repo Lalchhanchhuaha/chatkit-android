@@ -3,10 +3,14 @@ package com.chatkit.compose
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -33,7 +38,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -45,6 +54,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -55,6 +66,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.max
@@ -322,6 +335,7 @@ private fun MediaAttachmentTile(
     onCancelUpload: (ChatAttachment) -> Unit,
 ) {
     val context = LocalContext.current
+    var previewUri by remember { mutableStateOf<Uri?>(null) }
     val resolvedUri by produceState<Uri?>(attachment.localUri, attachment.id, automaticallyLoadsImages) {
         val local = attachment.localUri
         val available = runCatching { attachmentResolver.isAvailableLocally(attachment) }.getOrDefault(false)
@@ -374,7 +388,11 @@ private fun MediaAttachmentTile(
             .background(if (isVideo) Color.Black.copy(alpha = 0.78f) else theme.thumbnailPlaceholderBackgroundColor)
             .clickable(enabled = !isUploading && attachment.transferState != TransferState.Failed) {
                 val openUri = resolvedUri ?: posterUri ?: return@clickable
-                openAttachment(context, openUri, attachment.mimeType)
+                if (isVideo) {
+                    openAttachment(context, openUri, attachment.mimeType)
+                } else {
+                    previewUri = openUri
+                }
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -431,6 +449,114 @@ private fun MediaAttachmentTile(
             theme = theme,
             onCancel = { onCancelUpload(attachment) },
         )
+    }
+
+    previewUri?.let { uri ->
+        FullScreenImagePreview(
+            uri = uri,
+            fileName = attachment.fileName,
+            onDismiss = { previewUri = null },
+        )
+    }
+}
+
+/** In-app image viewer with pinch-zoom and an X close control (iOS ZoomableFullScreenImage). */
+@Composable
+private fun FullScreenImagePreview(
+    uri: Uri,
+    fileName: String?,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    BackHandler(onBack = onDismiss)
+    val bitmap by produceState<ImageBitmap?>(null, uri) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                context.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, bounds)
+                }
+                val maxSide = max(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+                val sample = max(1, maxSide / 2048)
+                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                context.contentResolver.openInputStream(uri)
+                    ?.use { BitmapFactory.decodeStream(it, null, opts) }
+                    ?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        val transformState = rememberTransformableState { zoom, pan, _ ->
+            scale = (scale * zoom).coerceIn(1f, 5f)
+            offset = if (scale <= 1.01f) Offset.Zero else offset + pan
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!,
+                    contentDescription = fileName,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(vertical = 50.dp)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offset.x
+                            translationY = offset.y
+                        }
+                        .transformable(transformState)
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    scale = if (scale > 1f) 1f else 2.5f
+                                    if (scale <= 1.01f) offset = Offset.Zero
+                                },
+                            )
+                        },
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 18.dp, end = 18.dp)
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable(onClick = onDismiss)
+                    .semantics { contentDescription = "Close full screen image" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
     }
 }
 

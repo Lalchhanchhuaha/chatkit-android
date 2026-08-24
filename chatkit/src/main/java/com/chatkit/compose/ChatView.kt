@@ -422,7 +422,8 @@ public fun ChatView(
     val voiceDuration = rememberVoiceDurationMillis(isRecording, recorder)
     val voiceLevel = rememberVoiceLevel(isRecording, recorder)
     val density = LocalDensity.current
-    val lockPadLiftPx = voiceLockPadLiftDp(voiceVerticalDragOffset, density)
+    val lockPadLiftPx = voiceLockPadLiftPx(voiceVerticalDragOffset, density)
+    val lockPadBottom = voiceLockPadBottomPadding(lockPadLiftPx, density)
 
     DisposableEffect(recorder) {
         onDispose {
@@ -431,12 +432,12 @@ public fun ChatView(
         }
     }
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(theme.backgroundColor),
     ) {
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Column(Modifier.fillMaxSize()) {
             MessageList(
                 messages = displayedMessages,
                 listState = listState,
@@ -471,21 +472,8 @@ public fun ChatView(
                 onCancelAttachmentUpload = onCancelAttachmentUpload,
                 audioPlayer = audioPlayer,
                 deliveryStatusContent = deliveryStatusContent,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             )
-            if (isVoiceRecorderActive && !isVoiceRecordingLocked) {
-                VoiceSlideToLockPad(
-                    theme = theme,
-                    isLockArmed = isVoiceLockArmed,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(
-                            end = 14.dp,
-                            bottom = 12.dp + with(density) { lockPadLiftPx.toDp() },
-                        ),
-                )
-            }
-        }
 
         // Smart VC detail layout: only the natural-height footer receives bottom insets.
         // The weighted transcript yields space as the keyboard or attachment panel grows.
@@ -552,9 +540,7 @@ public fun ChatView(
                                     level = voiceLevel,
                                     isCancelArmed = isVoiceCancelArmed,
                                     dragOffsetX = voiceDragOffset,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(end = 10.dp),
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
                             }
                             else -> {
@@ -714,6 +700,19 @@ public fun ChatView(
             )
         }
         }
+        }
+
+        // iOS: overlay on the full chat surface, bottomTrailing, 66pt above the mic.
+        VoiceSlideToLockPad(
+            theme = theme,
+            isLockArmed = isVoiceLockArmed,
+            visible = isVoiceRecorderActive && !isVoiceRecordingLocked,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(end = 14.dp, bottom = lockPadBottom),
+        )
     }
 }
 
@@ -790,9 +789,7 @@ internal fun ComposerButton(
 ) {
     Box(
         modifier = Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(theme.composerButtonBackgroundColor)
+            .size(44.dp)
             .semantics {
                 role = Role.Button
                 this.contentDescription = contentDescription
@@ -800,12 +797,20 @@ internal fun ComposerButton(
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = theme.composerIconColor.copy(alpha = if (enabled) 1f else 0.45f),
-            modifier = Modifier.size(18.dp),
-        )
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(theme.accentColor),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = theme.accentContentColor.copy(alpha = if (enabled) 1f else 0.45f),
+                modifier = Modifier.size(18.dp),
+            )
+        }
     }
 }
 
