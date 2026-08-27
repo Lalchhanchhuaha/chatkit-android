@@ -32,14 +32,28 @@ internal object VideoTrimExporter {
             muxer = MediaMuxer(destination.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
             val trackMap = HashMap<Int, Int>()
+            var orientationHint = 0
             for (index in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(index)
                 val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
                 if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+                    if (mime.startsWith("video/") &&
+                        format.containsKey(MediaFormat.KEY_ROTATION)
+                    ) {
+                        orientationHint = format.getInteger(MediaFormat.KEY_ROTATION)
+                    }
                     trackMap[index] = muxer.addTrack(format)
                 }
             }
             if (trackMap.isEmpty()) return false
+
+            // MediaMuxer drops container rotation unless set explicitly before start().
+            if (orientationHint == 0) {
+                orientationHint = readVideoRotationDegrees(source)
+            }
+            if (orientationHint != 0) {
+                muxer.setOrientationHint(orientationHint)
+            }
 
             muxer.start()
             val startUs = (startSeconds * 1_000_000.0).toLong()
@@ -89,6 +103,10 @@ internal object VideoTrimExporter {
             val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
                 ?.toIntOrNull()
                 ?: 0
+            val codedWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull()
+            val codedHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull()
             val frames = ArrayList<Bitmap>(frameCount)
             for (i in 0 until frameCount) {
                 val timeMs = if (frameCount == 1) {
@@ -100,12 +118,26 @@ internal object VideoTrimExporter {
                     timeMs * 1000L,
                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                 ) ?: continue
-                val upright = applyRotationDegrees(frame, rotation)
+                val upright = uprightRetrievedVideoFrame(frame, rotation, codedWidth, codedHeight)
                 frames += scaleDown(upright, maxSide)
             }
             frames
         } catch (_: Exception) {
             emptyList()
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    private fun readVideoRotationDegrees(file: File): Int {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toIntOrNull()
+                ?: 0
+        } catch (_: Exception) {
+            0
         } finally {
             runCatching { retriever.release() }
         }

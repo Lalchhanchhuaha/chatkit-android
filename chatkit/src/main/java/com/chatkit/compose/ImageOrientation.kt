@@ -43,9 +43,9 @@ internal fun decodeBitmapRespectingExif(
 }
 
 /**
- * Video frames from [MediaMetadataRetriever] are often sensor-oriented; apply
- * [MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION] so bubble posters match
- * what the user recorded.
+ * Video frames from [MediaMetadataRetriever] may be sensor-oriented or already
+ * display-oriented (OEM/API dependent). Use [uprightRetrievedVideoFrame] with
+ * coded size + [MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION].
  */
 internal fun decodeVideoFrameRespectingRotation(
     context: Context,
@@ -65,13 +65,7 @@ internal fun decodeVideoFrameRespectingRotation(
                 }
             }
             .getOrElse { return null }
-        val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            ?: return null
-        val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
-            ?.toIntOrNull()
-            ?: 0
-        val upright = applyRotationDegrees(frame, rotation)
-        if (maxSide > 0) scaleDownBitmap(upright, maxSide) else upright
+        uprightFrameFromRetriever(retriever, maxSide, timeUs)
     } catch (_: Exception) {
         null
     } finally {
@@ -88,18 +82,88 @@ internal fun decodeVideoFrameRespectingRotation(
     val retriever = MediaMetadataRetriever()
     return try {
         retriever.setDataSource(file.absolutePath)
-        val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            ?: return null
-        val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
-            ?.toIntOrNull()
-            ?: 0
-        val upright = applyRotationDegrees(frame, rotation)
-        if (maxSide > 0) scaleDownBitmap(upright, maxSide) else upright
+        uprightFrameFromRetriever(retriever, maxSide, timeUs)
     } catch (_: Exception) {
         null
     } finally {
         runCatching { retriever.release() }
     }
+}
+
+private fun uprightFrameFromRetriever(
+    retriever: MediaMetadataRetriever,
+    maxSide: Int,
+    timeUs: Long,
+): Bitmap? {
+    val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        ?: return null
+    val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+        ?.toIntOrNull()
+        ?: 0
+    val codedWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+        ?.toIntOrNull()
+    val codedHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+        ?.toIntOrNull()
+    val upright = uprightRetrievedVideoFrame(frame, rotation, codedWidth, codedHeight)
+    return if (maxSide > 0) scaleDownBitmap(upright, maxSide) else upright
+}
+
+/**
+ * Applies container rotation only when [frame] still matches the coded (sensor)
+ * orientation. If [getFrameAtTime] already returned display-oriented pixels,
+ * rotating again would leave the bubble thumbnail sideways / upside-down.
+ */
+internal fun uprightRetrievedVideoFrame(
+    frame: Bitmap,
+    rotationDegrees: Int,
+    codedWidth: Int?,
+    codedHeight: Int?,
+): Bitmap {
+    val rotation = ((rotationDegrees % 360) + 360) % 360
+    if (rotation == 0) return frame
+    return if (
+        shouldApplyVideoRotationMetadata(
+            frameWidth = frame.width,
+            frameHeight = frame.height,
+            rotationDegrees = rotation,
+            codedWidth = codedWidth,
+            codedHeight = codedHeight,
+        )
+    ) {
+        applyRotationDegrees(frame, rotation)
+    } else {
+        frame
+    }
+}
+
+/**
+ * Returns true when metadata rotation should still be applied to a retrieved frame.
+ * False when the frame already matches display orientation (common on some OEMs).
+ */
+internal fun shouldApplyVideoRotationMetadata(
+    frameWidth: Int,
+    frameHeight: Int,
+    rotationDegrees: Int,
+    codedWidth: Int?,
+    codedHeight: Int?,
+): Boolean {
+    val rotation = ((rotationDegrees % 360) + 360) % 360
+    if (rotation == 0) return false
+    val cw = codedWidth ?: 0
+    val ch = codedHeight ?: 0
+    if (cw <= 0 || ch <= 0) return true
+
+    val displayW = if (rotation == 90 || rotation == 270) ch else cw
+    val displayH = if (rotation == 90 || rotation == 270) cw else ch
+    val frameLandscape = frameWidth >= frameHeight
+    val codedLandscape = cw >= ch
+    val displayLandscape = displayW >= displayH
+
+    // Already matches display orientation and differs from coded → don't double-rotate.
+    if (frameLandscape == displayLandscape && frameLandscape != codedLandscape) {
+        return false
+    }
+    return true
 }
 
 /** Writes an upright JPEG poster next to a camera video for optimistic bubble display. */
@@ -124,12 +188,16 @@ private fun decodeBitmapWithFactory(
     uri: Uri,
     maxSide: Int,
 ): Bitmap? {
-    val orientation = context.contentResolver.openInputStream(uri)?.use { stream ->
-        ExifInterface(stream).getAttributeInt(
-            ExifInterface.TAG_ORIENTATION,
-            ExifInterface.ORIENTATION_NORMAL,
-        )
-    } ?: ExifInterface.ORIENTATION_NORMAL
+    // A valid JPEG may be an MPO container or carry malformed EXIF. Orientation
+    // metadata must never prevent BitmapFactory from decoding its first image.
+    val orientation = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            ExifInterface(stream).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL,
+            )
+        }
+    }.getOrNull() ?: ExifInterface.ORIENTATION_NORMAL
 
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     context.contentResolver.openInputStream(uri)?.use {

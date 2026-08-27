@@ -368,17 +368,29 @@ private fun MediaAttachmentTile(
         }
     }
     val displayUri = if (isVideo) (posterUri ?: resolvedUri) else resolvedUri
-    val bitmap by produceState<ImageBitmap?>(null, displayUri, isVideo) {
-        value = if (displayUri != null) {
+    val bitmap by produceState<ImageBitmap?>(
+        null,
+        displayUri,
+        resolvedUri,
+        posterUri,
+        isVideo,
+    ) {
+        value = if (displayUri != null || (isVideo && resolvedUri != null)) {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    val decoded = if (isVideo && posterUri == null) {
-                        decodeVideoFrameRespectingRotation(context, displayUri, maxSide = 1024)
-                    } else if (isVideo) {
-                        decodeBitmapRespectingExif(context, displayUri, maxSide = 1024)
-                            ?: decodeVideoFrameRespectingRotation(context, displayUri, maxSide = 1024)
+                    val decoded = if (isVideo) {
+                        // Prefer a frame from the real video so METADATA_KEY_VIDEO_ROTATION
+                        // is applied. Host posters are often raw sensor JPEGs with no EXIF.
+                        val fromVideo = resolvedUri?.let {
+                            decodeVideoFrameRespectingRotation(context, it, maxSide = 1024)
+                        }
+                        fromVideo
+                            ?: posterUri?.let {
+                                decodeBitmapRespectingExif(context, it, maxSide = 1024)
+                                    ?: decodeVideoFrameRespectingRotation(context, it, maxSide = 1024)
+                            }
                     } else {
-                        decodeBitmapRespectingExif(context, displayUri)
+                        decodeBitmapRespectingExif(context, displayUri!!)
                     }
                     decoded?.asImageBitmap()
                 }.getOrNull()

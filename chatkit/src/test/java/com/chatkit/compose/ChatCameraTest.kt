@@ -68,3 +68,46 @@ class VideoTrimRangeTest {
         assertEquals(0.2, range.endSeconds, 1e-6)
     }
 }
+
+class VideoFrameOrientationTest {
+    @Test
+    fun appliesRotationWhenFrameStillMatchesCodedLandscape() {
+        // Coded 1920x1080, rotation 90 → display portrait. Frame still landscape.
+        assertTrue(
+            shouldApplyVideoRotationMetadata(
+                frameWidth = 1920,
+                frameHeight = 1080,
+                rotationDegrees = 90,
+                codedWidth = 1920,
+                codedHeight = 1080,
+            ),
+        )
+    }
+
+    @Test
+    fun skipsRotationWhenFrameAlreadyDisplayPortrait() {
+        // Same metadata, but getFrameAtTime already returned portrait pixels.
+        assertFalse(
+            shouldApplyVideoRotationMetadata(
+                frameWidth = 1080,
+                frameHeight = 1920,
+                rotationDegrees = 90,
+                codedWidth = 1920,
+                codedHeight = 1080,
+            ),
+        )
+    }
+
+    @Test
+    fun zeroRotationNeverApplies() {
+        assertFalse(
+            shouldApplyVideoRotationMetadata(
+                frameWidth = 1920,
+                frameHeight = 1080,
+                rotationDegrees = 0,
+                codedWidth = 1920,
+                codedHeight = 1080,
+            ),
+        )
+    }
+}

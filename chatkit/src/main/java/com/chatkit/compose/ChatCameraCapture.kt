@@ -704,6 +704,9 @@ private fun LiveCameraScreen(
                                 return@ShutterButton
                             }
                             val capture = videoCapture ?: return@ShutterButton
+                            val rotation = previewView?.display?.rotation
+                                ?: android.view.Surface.ROTATION_0
+                            capture.targetRotation = rotation
                             val (id, file) = ChatCameraFiles.videoFile(context.cacheDir)
                             val pending = AtomicBoolean(true)
                             var builder = capture.output
