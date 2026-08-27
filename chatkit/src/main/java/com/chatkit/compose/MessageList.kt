@@ -47,6 +47,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -119,6 +120,7 @@ internal fun MessageList(
     onCancelAttachmentUpload: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
+    onMessageEditingChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // Keep index 0 as the newest row. reverseLayout anchors that row to the
@@ -235,6 +237,7 @@ internal fun MessageList(
                             onCancelAttachmentUpload = onCancelAttachmentUpload,
                             audioPlayer = audioPlayer,
                             deliveryStatusContent = deliveryStatusContent,
+                            onEditingChanged = onMessageEditingChanged,
                         )
                     }
                 }
@@ -336,12 +339,20 @@ internal fun MessageBubble(
     onCancelAttachmentUpload: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
+    onEditingChanged: (Boolean) -> Unit = {},
 ) {
     val incoming = message.isIncoming
     val corner = if (theme.bubbleCornerRadius == Dp.Unspecified) 12.dp else theme.bubbleCornerRadius
     val bubbleShape = messageBubbleShape(incoming, corner)
     var showActions by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showEditDialog) {
+        onEditingChanged(showEditDialog)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onEditingChanged(false) }
+    }
     var editedText by remember(message.id, message.text) { mutableStateOf(message.text) }
     val canEdit = onEditMessage != null && message.canEdit(Instant.now(), modificationWindowMillis)
     val maximumSwipe = with(LocalDensity.current) { 76.dp.toPx() }
@@ -381,8 +392,9 @@ internal fun MessageBubble(
 
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val maxBubble = ChatBubbleMetrics.maxBubbleWidth(maxWidth, theme.messageMaximumWidth)
-        // Match iOS content insets (leading 8, trailing 10).
-        val horizontalPadding = 18.dp
+        // Content insets: a little extra leading for body text, trailing so the time
+        // isn't flush against the bubble edge (leading 10 + trailing 12).
+        val horizontalPadding = 22.dp
         val captionLayout = remember(
             trimmedText,
             hasText,
@@ -504,8 +516,8 @@ internal fun MessageBubble(
                     if (attachmentContent != null) {
                         Column(
                             modifier = Modifier.padding(
-                                start = 8.dp,
-                                end = 10.dp,
+                                start = 10.dp,
+                                end = 12.dp,
                                 top = if (hasMedia && !hasText) 4.dp else 6.dp,
                                 bottom = 5.dp,
                             ),
@@ -544,7 +556,7 @@ internal fun MessageBubble(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 8.dp)
+                                .padding(start = 10.dp, end = 12.dp)
                                 .padding(
                                     top = when {
                                         !hasMediaAttachments && message.replyToMessageId == null -> 6.dp

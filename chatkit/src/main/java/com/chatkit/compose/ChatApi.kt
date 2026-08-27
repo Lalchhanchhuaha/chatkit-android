@@ -22,7 +22,14 @@ public data class ChatConfig(
     public val acceptedDocumentMimeTypes: List<String> = listOf("*/*"),
     public val automaticallyLoadIncomingImages: Boolean = true,
     public val maximumMediaSelection: Int = 10,
+    /**
+     * Legacy TakePicture URI. Ignored: camera capture now uses an in-app CameraX
+     * destination and writes cache files itself. Retained for binary compatibility.
+     */
+    @Deprecated("Camera capture no longer requires a host FileProvider URI")
     public val cameraCaptureUri: Uri? = null,
+    /** When true and the device has a camera, show the composer camera button. */
+    public val enableCameraCapture: Boolean = true,
     public val messageModificationWindowMillis: Long = 15 * 60 * 1000L,
     public val showDeliveryStatus: Boolean = false,
     public val enableSwipeToReply: Boolean = true,
@@ -103,6 +110,8 @@ public fun ChatScreen(
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
 ) {
     val theme = colors.toTheme(dimensions, config.showDeliveryStatus)
+    @Suppress("DEPRECATION")
+    val legacyCameraUri = config.cameraCaptureUri
     ChatView(
         messages = messages,
         modifier = modifier,
@@ -121,7 +130,8 @@ public fun ChatScreen(
         documentMimeTypes = config.acceptedDocumentMimeTypes,
         automaticallyLoadsImages = config.automaticallyLoadIncomingImages,
         maximumMediaSelection = config.maximumMediaSelection.coerceAtLeast(1),
-        cameraCaptureUri = config.cameraCaptureUri,
+        cameraCaptureUri = legacyCameraUri,
+        enableCameraCapture = config.enableCameraCapture,
         attachmentResolver = attachmentResolver,
         onMediaPicked = onMediaPicked,
         onDocumentsPicked = onDocumentsPicked,

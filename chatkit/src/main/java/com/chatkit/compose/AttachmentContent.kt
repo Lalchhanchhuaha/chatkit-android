@@ -1,7 +1,6 @@
 package com.chatkit.compose
 
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -69,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 
@@ -336,21 +336,30 @@ private fun MediaAttachmentTile(
 ) {
     val context = LocalContext.current
     var previewUri by remember { mutableStateOf<Uri?>(null) }
-    val resolvedUri by produceState<Uri?>(attachment.localUri, attachment.id, automaticallyLoadsImages) {
-        val local = attachment.localUri
-        val available = runCatching { attachmentResolver.isAvailableLocally(attachment) }.getOrDefault(false)
-        val provided = if (automaticallyLoadsImages || available || !attachment.isImage) {
-            runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
-        } else {
-            null
+    var retryToken by remember(attachment.id) { mutableStateOf(0) }
+    val resolvedUri by produceState<Uri?>(
+        attachment.localUri,
+        attachment.id,
+        automaticallyLoadsImages,
+        retryToken,
+    ) {
+        var result: Uri? = attachment.localUri
+        // Keep trying while the bubble is on screen. Media prefetch can lag behind
+        // the first compose (or fail once during a timeout) and previously left a
+        // permanent empty placeholder.
+        var attempt = 0
+        while (result == null && attempt < 12) {
+            val available = runCatching { attachmentResolver.isAvailableLocally(attachment) }.getOrDefault(false)
+            if (automaticallyLoadsImages || available || !attachment.isImage) {
+                result = runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
+            }
+            if (result != null) break
+            attempt += 1
+            delay((750L * attempt).coerceAtMost(5_000L))
         }
-        value = when {
-            local != null -> local
-            provided != null && (automaticallyLoadsImages || available || !attachment.isImage) -> provided
-            else -> null
-        }
+        value = result
     }
-    val posterUri by produceState<Uri?>(attachment.posterUri, attachment.id) {
+    val posterUri by produceState<Uri?>(attachment.posterUri, attachment.id, retryToken) {
         value = if (isVideo) {
             attachment.posterUri
                 ?: runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull()
@@ -363,9 +372,7 @@ private fun MediaAttachmentTile(
         value = if (displayUri != null) {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    context.contentResolver.openInputStream(displayUri)
-                        .use { BitmapFactory.decodeStream(it) }
-                        ?.asImageBitmap()
+                    decodeBitmapRespectingExif(context, displayUri)?.asImageBitmap()
                 }.getOrNull()
             }
         } else {
@@ -378,6 +385,7 @@ private fun MediaAttachmentTile(
     val durationPadV = if (compact) 3.dp else 4.dp
     val durationInset = if (compact) 6.dp else 8.dp
     val isUploading = attachment.transferState is TransferState.Uploading
+    val waitingForMedia = !isUploading && bitmap == null && resolvedUri == null && (!isVideo || posterUri == null)
 
     Box(
         modifier = Modifier
@@ -387,7 +395,12 @@ private fun MediaAttachmentTile(
             .then(if (isBlurred) Modifier.blur(9.dp).scale(1.08f) else Modifier)
             .background(if (isVideo) Color.Black.copy(alpha = 0.78f) else theme.thumbnailPlaceholderBackgroundColor)
             .clickable(enabled = !isUploading && attachment.transferState != TransferState.Failed) {
-                val openUri = resolvedUri ?: posterUri ?: return@clickable
+                val openUri = resolvedUri ?: posterUri
+                if (openUri == null) {
+                    // Tap empty placeholder to force another download attempt.
+                    retryToken += 1
+                    return@clickable
+                }
                 if (isVideo) {
                     openAttachment(context, openUri, attachment.mimeType)
                 } else {
@@ -402,6 +415,12 @@ private fun MediaAttachmentTile(
                 contentDescription = attachment.fileName,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+            )
+        } else if (waitingForMedia) {
+            CircularProgressIndicator(
+                color = if (isVideo) Color.White else theme.accentColor,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(28.dp),
             )
         } else if (isVideo) {
             Icon(
@@ -472,16 +491,7 @@ private fun FullScreenImagePreview(
     val bitmap by produceState<ImageBitmap?>(null, uri) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                context.contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, bounds)
-                }
-                val maxSide = max(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
-                val sample = max(1, maxSide / 2048)
-                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-                context.contentResolver.openInputStream(uri)
-                    ?.use { BitmapFactory.decodeStream(it, null, opts) }
-                    ?.asImageBitmap()
+                decodeBitmapRespectingExif(context, uri, maxSide = 2048)?.asImageBitmap()
             }.getOrNull()
         }
     }
@@ -589,8 +599,9 @@ internal fun VoiceMessageRow(
         isActive -> audioPlayer.durationMillis
         else -> knownDuration
     }
-    val playFill = if (isIncoming) theme.accentColor else theme.accentContentColor.copy(alpha = 0.92f)
-    val playIcon = if (isIncoming) theme.accentContentColor else theme.accentColor
+    // White control fill keeps play/pause readable on both incoming and outgoing bubbles.
+    val playFill = theme.accentContentColor.copy(alpha = 0.92f)
+    val playIcon = theme.accentColor
     val waveActive = if (isIncoming) theme.accentColor else theme.accentContentColor
     val waveInactive = if (isIncoming) {
         theme.incomingTimestampColor.copy(alpha = 0.35f)
@@ -603,6 +614,7 @@ internal fun VoiceMessageRow(
         modifier = Modifier
             .fillMaxWidth()
             .widthIn(min = 220.dp)
+            .padding(top = 4.dp)
             .semantics {
                 contentDescription = "Voice message, ${formatAttachmentDuration(knownDuration)}"
             },
@@ -611,7 +623,7 @@ internal fun VoiceMessageRow(
     ) {
         Box(
             modifier = Modifier
-                .size(36.dp)
+                .size(28.dp)
                 .clip(CircleShape)
                 .background(playFill)
                 .clickable {
@@ -630,9 +642,9 @@ internal fun VoiceMessageRow(
                 is TransferState.Uploading -> {
                     CircularProgressIndicator(
                         progress = { transfer.progress.coerceIn(0.04f, 1f) },
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(28.dp),
                         color = playIcon,
-                        strokeWidth = 3.dp,
+                        strokeWidth = 2.5.dp,
                     )
                     Icon(
                         imageVector = Icons.Default.Close,
@@ -645,13 +657,13 @@ internal fun VoiceMessageRow(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = "Retry upload",
                     tint = playIcon,
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(16.dp),
                 )
                 TransferState.Uploaded -> Icon(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (isPlaying) "Pause voice message" else "Play voice message",
                     tint = playIcon,
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }

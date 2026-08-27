@@ -8,7 +8,7 @@ networking, persistence, uploads, delivery state, pagination, and retry policy.
 
 - Incoming/outgoing text and attachment bubbles, date separators, receipts, typing, and unread count
 - Multiline composer with atomic `ChatDraft` submission
-- Android Photo Picker, document picker with persistable URI grants, and optional camera capture
+- Android Photo Picker, document picker, and full-screen CameraX capture with review/caption/trim
 - Optimistic media, document, and voice rows reconciled by stable message ID
 - Hold/slide-to-cancel/slide-up-to-lock voice recording and conversation-scoped audio playback
 - Retry, edit, delete, upload cancellation, host attachment resolution, and configurable theming
@@ -98,13 +98,15 @@ echo the same message ID in `messages`; this removes ChatKit's temporary copy wi
 
 ## Permissions and URIs
 
-The library declares `RECORD_AUDIO` and `CAMERA`, and requests audio permission only when recording
-is invoked. Photo and document selection use system contracts and require no broad storage
+The library declares `RECORD_AUDIO` and `CAMERA`, and requests them when recording or opening
+the in-app camera. Photo and document selection use system contracts and require no broad storage
 permission.
 
-Camera is opt-in. Create an app-owned content URI with your own `FileProvider`, grant URI access,
-and pass it as `ChatConfig(cameraCaptureUri = uri)`. ChatKit intentionally does not declare a
-provider authority on behalf of every consuming app.
+The composer camera button appears when the device has a camera (`ChatConfig.enableCameraCapture`,
+default `true`). Capture uses CameraX with an inline photo/video review screen; results are written
+to the app cache as `chat-camera-<uuid>.jpg` / `.mp4` and returned on `ChatMediaAttachment.localFile`.
+Hosts should load bytes from that file for upload—never treat the UUID as a MediaStore id.
+`ChatConfig.cameraCaptureUri` is deprecated and ignored.
 
 Voice recordings are temporary cache files. Move or upload them from `onVoiceRecorded`; do not
 treat their URI as durable storage.
@@ -118,13 +120,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.5.1`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.0`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.0 | Full-screen CameraX capture with photo/video review, caption, trim, and `localFile` host contract |
 | 1.5.1 | Fix hold-to-record layout: mic stays trailing, waveform/duration/cancel no longer overlap; lock pad positioning |
 | 1.5.0 | iOS-parity media bubbles (image/video grids, voice waveform) and hold-to-record voice composer; tighter bubble/composer sizing |
 | 1.4.4 | iOS-parity delivery ticks (single/double/blue) and attachment picker (Photos/Videos tabs, 4-col grid, document tile) |

@@ -231,13 +231,13 @@ internal fun VoiceMicButton(
             Modifier
                 .size(36.dp)
                 .clip(CircleShape)
-                .background(theme.accentColor),
+                .background(theme.composerButtonBackgroundColor),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Filled.Mic,
                 contentDescription = null,
-                tint = theme.accentContentColor,
+                tint = theme.composerIconColor,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -385,7 +385,7 @@ internal fun LockedVoiceRecordingStatus(
             Modifier
                 .size(36.dp)
                 .clip(CircleShape)
-                .background(theme.accentColor)
+                .background(theme.composerButtonBackgroundColor)
                 .clickable(onClick = onSend)
                 .semantics { contentDescription = "Send voice recording" },
             contentAlignment = Alignment.Center,
@@ -393,7 +393,7 @@ internal fun LockedVoiceRecordingStatus(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.Send,
                 contentDescription = null,
-                tint = theme.accentContentColor,
+                tint = theme.composerIconColor,
                 modifier = Modifier.size(16.dp),
             )
         }

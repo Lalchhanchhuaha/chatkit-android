@@ -595,6 +595,12 @@ private fun decodeSampledBitmap(
     reqWidth: Int,
     reqHeight: Int,
 ): ImageBitmap? {
+    val orientation = cr.openInputStream(uri)?.use { stream ->
+        android.media.ExifInterface(stream).getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION,
+            android.media.ExifInterface.ORIENTATION_NORMAL,
+        )
+    } ?: android.media.ExifInterface.ORIENTATION_NORMAL
     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     opts.inSampleSize = run {
@@ -605,7 +611,8 @@ private fun decodeSampledBitmap(
         size
     }
     opts.inJustDecodeBounds = false
-    return cr.openInputStream(uri)?.use {
-        BitmapFactory.decodeStream(it, null, opts)?.asImageBitmap()
-    }
+    val raw = cr.openInputStream(uri)?.use {
+        BitmapFactory.decodeStream(it, null, opts)
+    } ?: return null
+    return applyExifOrientation(raw, orientation).asImageBitmap()
 }

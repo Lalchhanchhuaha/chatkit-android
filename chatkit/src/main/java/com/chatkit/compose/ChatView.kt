@@ -111,7 +111,8 @@ public fun ChatView(
     documentMimeTypes: List<String> = listOf("*/*"),
     automaticallyLoadsImages: Boolean = true,
     maximumMediaSelection: Int = 10,
-    cameraCaptureUri: Uri? = null,
+    @Suppress("UNUSED_PARAMETER") cameraCaptureUri: Uri? = null,
+    enableCameraCapture: Boolean = true,
     showsComposer: Boolean = true,
     showsDocumentAttachments: Boolean = true,
     attachmentResolver: AttachmentResolver = AttachmentResolver.None,
@@ -149,6 +150,8 @@ public fun ChatView(
     var draft by remember { mutableStateOf("") }
     var replyingTo by remember { mutableStateOf<ChatMessage?>(null) }
     var isAttachmentPickerPresented by remember { mutableStateOf(false) }
+    var isCameraPresented by remember { mutableStateOf(false) }
+    var isEditingMessage by remember { mutableStateOf(false) }
     val pendingMedia = remember { mutableStateListOf<ChatMediaAttachment>() }
     val pendingDocuments = remember { mutableStateListOf<Uri>() }
     val optimisticMessages = remember { mutableStateListOf<ChatMessage>() }
@@ -188,19 +191,8 @@ public fun ChatView(
     }
 
     val mimeArray = remember(documentMimeTypes) { documentMimeTypes.toTypedArray() }
-    val cameraPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture(),
-    ) { captured ->
-        if (captured && cameraCaptureUri != null) {
-            pendingDocuments.clear()
-            pendingMedia.clear()
-            pendingMedia += ChatMediaAttachment(
-                id = cameraCaptureUri.toString(),
-                mediaType = MediaType.Photo,
-                localUri = cameraCaptureUri,
-            )
-        }
-    }
+    val deviceHasCamera = remember(context) { ChatCameraFiles.deviceHasCamera(context) }
+    val showsCameraButton = enableCameraCapture && deviceHasCamera
     val multiDocumentPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -242,24 +234,6 @@ public fun ChatView(
         }
     }
 
-    val cameraPermission = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        val uri = cameraCaptureUri
-        if (granted && uri != null) cameraPicker.launch(uri)
-    }
-
-    fun launchCameraCapture() {
-        val uri = cameraCaptureUri ?: return
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            runCatching { cameraPicker.launch(uri) }
-        } else {
-            cameraPermission.launch(Manifest.permission.CAMERA)
-        }
-    }
-
     fun presentAttachmentPicker() {
         onAttachmentTap()
         keyboardController?.hide()
@@ -280,6 +254,41 @@ public fun ChatView(
         keyboardController?.hide()
         focusManager.clearFocus(force = true)
         dismissAttachmentPicker()
+    }
+
+    fun openCameraCapture() {
+        dismissInputPanels()
+        isCameraPresented = true
+    }
+
+    fun submitCameraCapture(capture: CapturedMedia) {
+        val media = ChatCameraFiles.toMediaAttachment(capture)
+        val caption = capture.caption.trim()
+        val optimistic = ChatMessage(
+            id = UUID.randomUUID().toString(),
+            text = caption,
+            timestamp = Instant.now(),
+            direction = MessageDirection.Outgoing,
+            deliveryStatus = DeliveryStatus.None,
+            replyToMessageId = replyingTo?.id,
+            replyToMessageText = replyingTo?.text,
+            replyToSenderName = replyingTo?.senderName,
+            attachments = listOf(ChatCameraFiles.makeOptimisticAttachment(media)),
+        )
+        optimisticMessages += optimistic
+        onOptimisticMessage(optimistic)
+        val draft = ChatDraft(
+            text = caption,
+            media = listOf(media),
+            replyToMessageId = replyingTo?.id,
+        )
+        if (onSubmit != null) {
+            onSubmit(draft)
+        } else {
+            onMediaPicked(listOf(media))
+            if (caption.isNotEmpty()) onSend(caption)
+        }
+        replyingTo = null
     }
 
     fun startRecording(): Boolean {
@@ -382,7 +391,7 @@ public fun ChatView(
                         fileName = if (isVideo) "video.mp4" else "photo.jpg",
                         mimeType = if (isVideo) "video/mp4" else "image/jpeg",
                         durationMillis = media.durationMillis,
-                        localUri = media.localUri,
+                        localUri = media.resolvedUri(),
                         transferState = TransferState.Uploading(0f),
                     )
                 } + pendingDocuments.mapIndexed { index, uri ->
@@ -472,6 +481,7 @@ public fun ChatView(
                 onCancelAttachmentUpload = onCancelAttachmentUpload,
                 audioPlayer = audioPlayer,
                 deliveryStatusContent = deliveryStatusContent,
+                onMessageEditingChanged = { isEditingMessage = it },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
 
@@ -568,16 +578,15 @@ public fun ChatView(
                                             presentAttachmentPicker()
                                         }
                                     }
-                                    if (cameraCaptureUri != null) {
+                                    if (showsCameraButton) {
                                         Spacer(Modifier.width(8.dp))
                                         ComposerButton(
                                             icon = Icons.Default.CameraAlt,
                                             contentDescription = "Open camera",
-                                            enabled = true,
+                                            enabled = !isEditingMessage,
                                             theme = theme,
                                         ) {
-                                            dismissAttachmentPicker()
-                                            launchCameraCapture()
+                                            openCameraCapture()
                                         }
                                     }
                                     Spacer(Modifier.width(10.dp))
@@ -713,6 +722,15 @@ public fun ChatView(
                 .navigationBarsPadding()
                 .padding(end = 14.dp, bottom = lockPadBottom),
         )
+
+        if (isCameraPresented) {
+            ChatCameraCaptureDialog(
+                theme = theme,
+                showsVideoAttachments = showsVideoAttachments,
+                onDismiss = { isCameraPresented = false },
+                onCaptured = ::submitCameraCapture,
+            )
+        }
     }
 }
 
@@ -801,13 +819,13 @@ internal fun ComposerButton(
             modifier = Modifier
                 .size(36.dp)
                 .clip(CircleShape)
-                .background(theme.accentColor),
+                .background(theme.composerButtonBackgroundColor),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = theme.accentContentColor.copy(alpha = if (enabled) 1f else 0.45f),
+                tint = theme.composerIconColor.copy(alpha = if (enabled) 1f else 0.45f),
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -862,23 +880,20 @@ private fun ComposerMediaChip(
     onRemove: () -> Unit,
 ) {
     val context = LocalContext.current
-    val bitmap by produceState<android.graphics.Bitmap?>(null, item.id) {
+    val bitmap by produceState<android.graphics.Bitmap?>(null, item.id, item.localFile, item.localUri) {
         value = withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                val uri = item.resolvedUri()
+                if (item.localFile != null) {
+                    decodeBitmapRespectingExif(context, uri, maxSide = 160)
+                } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     context.contentResolver.loadThumbnail(
-                        item.localUri,
+                        uri,
                         android.util.Size(160, 160),
                         null,
                     )
                 } else {
-                    @Suppress("DEPRECATION")
-                    android.media.ThumbnailUtils.extractThumbnail(
-                        android.graphics.BitmapFactory.decodeStream(
-                            context.contentResolver.openInputStream(item.localUri)
-                        ),
-                        160, 160,
-                    )
+                    decodeBitmapRespectingExif(context, uri, maxSide = 160)
                 }
             }.getOrNull()
         }

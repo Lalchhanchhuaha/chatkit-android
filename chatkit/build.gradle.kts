@@ -46,6 +46,16 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.camera.video)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
@@ -58,7 +68,7 @@ dependencies {
 // JitPack supplies GROUP and VERSION for tagged GitHub builds. Local publishing keeps stable
 // coordinates so consumers can also test the AAR through mavenLocal().
 group = providers.environmentVariable("GROUP").getOrElse("com.chatkit")
-version = providers.environmentVariable("VERSION").getOrElse("1.5.1")
+version = providers.environmentVariable("VERSION").getOrElse("1.6.0")
 
 afterEvaluate {
     publishing {

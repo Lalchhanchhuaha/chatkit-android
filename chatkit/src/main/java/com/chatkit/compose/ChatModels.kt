@@ -2,6 +2,8 @@ package com.chatkit.compose
 
 import android.net.Uri
 import androidx.compose.runtime.Immutable
+import androidx.core.net.toUri
+import java.io.File
 import java.time.Instant
 
 /** Immutable message supplied by the host, ordered oldest to newest. */
@@ -94,14 +96,24 @@ public sealed interface TransferState {
     public data object Failed : TransferState
 }
 
-/** Lightweight media selection returned to the host. */
+/**
+ * Lightweight media selection returned to the host.
+ *
+ * Gallery picks populate [localUri] from MediaStore. Camera captures populate both
+ * [localFile] (required) and [localUri] (`file` URI for the same cache file). Never treat a
+ * camera UUID as a MediaStore identifier.
+ */
 @Immutable
 public data class ChatMediaAttachment(
     public val id: String,
     public val mediaType: MediaType,
     public val durationMillis: Long? = null,
     public val localUri: Uri,
-)
+    public val localFile: File? = null,
+) {
+    /** Prefer the camera cache file when present; otherwise the gallery content URI. */
+    public fun resolvedUri(): Uri = localFile?.toUri() ?: localUri
+}
 
 /** Media category selected by the user. */
 public enum class MediaType { Photo, Video }
