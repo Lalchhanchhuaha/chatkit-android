@@ -11,10 +11,14 @@ import android.provider.Settings
 import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +26,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -40,7 +45,6 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,11 +55,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -149,16 +158,23 @@ internal fun AttachmentPanel(
             .clip(PanelTopShape)
             .background(theme.attachmentPanelBackgroundColor),
     ) {
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 4.dp),
         ) {
-            TextButton(onClick = onClose, modifier = Modifier.width(72.dp)) {
-                Text("Cancel", color = theme.accentColor, maxLines = 1)
-            }
+            Text(
+                text = "Cancel",
+                color = theme.accentColor,
+                fontSize = 16.sp,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onClose)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            )
             if (showsVideoAttachments) {
                 MediaTabSegmented(
                     selected = selectedTab,
@@ -174,19 +190,20 @@ internal fun AttachmentPanel(
                             }
                         }
                     },
-                    modifier = Modifier.weight(1f),
+                    segmentModifier = Modifier
+                        .align(Alignment.Center)
+                        .width(210.dp),
                 )
             } else {
                 Text(
                     text = "Photos",
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.align(Alignment.Center),
                     color = theme.incomingTextColor,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp,
                     textAlign = TextAlign.Center,
                 )
             }
-            Spacer(Modifier.width(72.dp))
         }
 
         HorizontalDivider(color = Color.Black.copy(alpha = 0.08f))
@@ -272,31 +289,81 @@ private fun MediaTabSegmented(
     selected: MediaTab,
     theme: ChatTheme,
     onSelect: (MediaTab) -> Unit,
-    modifier: Modifier = Modifier,
+    segmentModifier: Modifier = Modifier,
 ) {
+    val tabs = MediaTab.entries
+    val trackShape = RoundedCornerShape(10.dp)
+    val thumbShape = RoundedCornerShape(8.dp)
+
     Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(9.dp))
-            .background(Color(0xFF787880).copy(alpha = 0.12f))
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
+        modifier = segmentModifier
+            .height(36.dp)
+            .clip(trackShape)
+            .background(theme.composerButtonBackgroundColor)
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        MediaTab.entries.forEach { tab ->
+        for (tab in tabs) {
             val active = tab == selected
+            val thumbColor = animateColorAsState(
+                targetValue = if (active) {
+                    theme.attachmentPanelBackgroundColor
+                } else {
+                    Color.Transparent
+                },
+                animationSpec = tween(200, easing = FastOutSlowInEasing),
+                label = "media-tab-thumb-$tab",
+            ).value
+            val labelColor = animateColorAsState(
+                targetValue = if (active) theme.accentColor else theme.incomingTimestampColor,
+                animationSpec = tween(180),
+                label = "media-tab-label-$tab",
+            ).value
+
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(if (active) Color.White else Color.Transparent)
-                    .clickable { onSelect(tab) }
-                    .padding(vertical = 7.dp),
+                    .fillMaxHeight()
+                    .then(
+                        if (active) {
+                            Modifier.shadow(elevation = 2.dp, shape = thumbShape, clip = false)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .clip(thumbShape)
+                    .background(thumbColor)
+                    .then(
+                        if (active) {
+                            Modifier.border(
+                                width = 0.5.dp,
+                                color = Color.Black.copy(alpha = 0.06f),
+                                shape = thumbShape,
+                            )
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .semantics {
+                        role = Role.Tab
+                        this.selected = active
+                    }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { onSelect(tab) },
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = tab.name,
-                    color = theme.incomingTextColor,
+                    text = when (tab) {
+                        MediaTab.Photos -> "Photos"
+                        MediaTab.Videos -> "Videos"
+                    },
+                    color = labelColor,
                     fontSize = 13.sp,
                     fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1,
                 )
             }
         }

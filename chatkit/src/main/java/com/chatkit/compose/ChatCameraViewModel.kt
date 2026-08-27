@@ -204,7 +204,7 @@ internal class ChatCameraViewModel(
         }
         abandonedFiles.forEach(ChatCameraFiles::deleteQuietly)
         abandonedFiles.clear()
-        clearReviewSavedState()
+        resetSessionKeepingFiles()
     }
 
     fun trackAbandoned(file: File) {
@@ -224,15 +224,13 @@ internal class ChatCameraViewModel(
 
         val capture = reviewing.capture.copy(caption = caption.trim())
         if (capture.mediaType != MediaType.Video) {
-            clearReviewSavedState()
-            onReady(capture)
+            finishSubmitWithoutDeleting(capture, onReady)
             return true
         }
 
         val total = capture.durationSeconds ?: 0.0
         if (trimRange.isFullRange(total)) {
-            clearReviewSavedState()
-            onReady(capture.copy(durationSeconds = total))
+            finishSubmitWithoutDeleting(capture.copy(durationSeconds = total), onReady)
             return true
         }
 
@@ -250,24 +248,44 @@ internal class ChatCameraViewModel(
             if (!ok) {
                 ChatCameraFiles.deleteQuietly(outFile)
                 // Fall back to the original file if remux fails.
-                clearReviewSavedState()
-                onReady(capture)
+                finishSubmitWithoutDeleting(capture, onReady)
                 return@launch
             }
             ChatCameraFiles.deleteQuietly(capture.localFile)
-            val duration = trimRange.durationSeconds
-            clearReviewSavedState()
-            onReady(
+            finishSubmitWithoutDeleting(
                 CapturedMedia(
                     id = id,
                     mediaType = MediaType.Video,
                     localFile = outFile,
-                    durationSeconds = duration,
+                    durationSeconds = trimRange.durationSeconds,
                     caption = capture.caption,
                 ),
+                onReady,
             )
         }
         return true
+    }
+
+    /** Clears review UI after send without deleting the file the host still needs. */
+    private fun finishSubmitWithoutDeleting(
+        capture: CapturedMedia,
+        onReady: (CapturedMedia) -> Unit,
+    ) {
+        resetSessionKeepingFiles()
+        onReady(capture)
+    }
+
+    private fun resetSessionKeepingFiles() {
+        caption = ""
+        trimRange = VideoTrimRange(0.0, 0.0)
+        isRecording = false
+        flashEnabled = false
+        submitInFlight = false
+        clearReviewSavedState()
+        savedStateHandle["caption"] = ""
+        savedStateHandle["trimStart"] = 0.0
+        savedStateHandle["trimEnd"] = 0.0
+        cameraState = ChatCameraState.RequestingPermission
     }
 
     private fun clearReviewSavedState() {

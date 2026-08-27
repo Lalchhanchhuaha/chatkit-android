@@ -14,7 +14,10 @@ import kotlin.math.max
  * transform in EXIF. [BitmapFactory] ignores that tag, which is why received
  * camera photos look rotated in chat bubbles.
  *
- * On API 28+, [android.graphics.ImageDecoder] applies EXIF automatically.
+ * On API 28+, [android.graphics.ImageDecoder] applies EXIF automatically when the
+ * ContentResolver can supply a MIME type. Host cache files are frequently stored
+ * without an extension (for example `chat_media/<uuid>`), so FileProvider returns
+ * a null type and ImageDecoder fails — fall back to [BitmapFactory] in that case.
  */
 internal fun decodeBitmapRespectingExif(
     context: Context,
@@ -22,7 +25,7 @@ internal fun decodeBitmapRespectingExif(
     maxSide: Int = 0,
 ): Bitmap? {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        return runCatching {
+        val decoded = runCatching {
             val source = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
             android.graphics.ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 if (maxSide > 0) {
@@ -31,8 +34,16 @@ internal fun decodeBitmapRespectingExif(
                 }
             }
         }.getOrNull()
+        if (decoded != null) return decoded
     }
+    return decodeBitmapWithFactory(context, uri, maxSide)
+}
 
+private fun decodeBitmapWithFactory(
+    context: Context,
+    uri: Uri,
+    maxSide: Int,
+): Bitmap? {
     val orientation = context.contentResolver.openInputStream(uri)?.use { stream ->
         ExifInterface(stream).getAttributeInt(
             ExifInterface.TAG_ORIENTATION,
@@ -44,6 +55,7 @@ internal fun decodeBitmapRespectingExif(
     context.contentResolver.openInputStream(uri)?.use {
         BitmapFactory.decodeStream(it, null, bounds)
     }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
     val longest = max(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
     val opts = BitmapFactory.Options().apply {
         inSampleSize = if (maxSide > 0) max(1, longest / maxSide) else 1

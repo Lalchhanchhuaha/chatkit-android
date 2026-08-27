@@ -151,6 +151,7 @@ public fun ChatView(
     var replyingTo by remember { mutableStateOf<ChatMessage?>(null) }
     var isAttachmentPickerPresented by remember { mutableStateOf(false) }
     var isCameraPresented by remember { mutableStateOf(false) }
+    var cameraSessionKey by remember { mutableIntStateOf(0) }
     var isEditingMessage by remember { mutableStateOf(false) }
     val pendingMedia = remember { mutableStateListOf<ChatMediaAttachment>() }
     val pendingDocuments = remember { mutableStateListOf<Uri>() }
@@ -258,6 +259,7 @@ public fun ChatView(
 
     fun openCameraCapture() {
         dismissInputPanels()
+        cameraSessionKey += 1
         isCameraPresented = true
     }
 
@@ -727,6 +729,7 @@ public fun ChatView(
             ChatCameraCaptureDialog(
                 theme = theme,
                 showsVideoAttachments = showsVideoAttachments,
+                sessionKey = cameraSessionKey,
                 onDismiss = { isCameraPresented = false },
                 onCaptured = ::submitCameraCapture,
             )

@@ -385,7 +385,12 @@ private fun MediaAttachmentTile(
     val durationPadV = if (compact) 3.dp else 4.dp
     val durationInset = if (compact) 6.dp else 8.dp
     val isUploading = attachment.transferState is TransferState.Uploading
-    val waitingForMedia = !isUploading && bitmap == null && resolvedUri == null && (!isVideo || posterUri == null)
+    // Spinner while downloading OR while pixels are still decoding. ChatKit 1.5+ used
+    // ImageDecoder which fails on extension-less FileProvider URIs and previously left
+    // a permanent blank tile once resolvedUri was non-null.
+    val waitingForMedia = !isUploading &&
+        bitmap == null &&
+        attachment.transferState != TransferState.Failed
 
     Box(
         modifier = Modifier
