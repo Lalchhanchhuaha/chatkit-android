@@ -39,11 +39,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.5.1")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.0")
 }
 ```
 
-For development snapshots, replace `v1.5.1` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.0` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
