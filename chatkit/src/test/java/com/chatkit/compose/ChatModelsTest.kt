@@ -23,8 +23,18 @@ class ChatModelsTest {
     }
 
     @Test
-    fun mimeTypeTakesPriorityOverExtension() {
-        assertFalse(ChatAttachment("1", "misleading.jpg", "application/pdf").isImage)
+    fun mediaMimePrefixWinsOverConflictingExtension() {
+        assertTrue(ChatAttachment("1", "clip.bin", "video/mp4").isVideo)
+        assertTrue(ChatAttachment("2", "photo.bin", "image/png").isImage)
+    }
+
+    @Test
+    fun nonMediaMimeStillUsesExtensionLikeIos() {
+        // iOS checks extension even when MIME is application/* / octet-stream.
+        assertTrue(ChatAttachment("1", "photo.jpg", "application/octet-stream").isImage)
+        assertTrue(ChatAttachment("2", "clip.mp4", "application/octet-stream").isVideo)
+        assertTrue(ChatAttachment("3", "voice.m4a", "application/octet-stream").isAudio)
+        assertTrue(ChatAttachment("4", "selfie.jpg", "application/pdf").isImage)
     }
 
     @Test

@@ -554,6 +554,7 @@ internal fun MessageBubble(
                                 automaticallyLoadsImages = automaticallyLoadsImages,
                                 attachmentResolver = attachmentResolver,
                                 onCancelUpload = onCancelAttachmentUpload,
+                                onRetryAttachment = { onRetry() },
                                 audioPlayer = audioPlayer,
                             )
                         }

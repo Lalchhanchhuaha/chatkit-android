@@ -43,6 +43,27 @@ internal fun decodeBitmapRespectingExif(
 }
 
 /**
+ * Bubble preview decode that mirrors iOS UIImage / AVAssetImageGenerator
+ * resilience: try the preferred pipeline first, then the other. Hosts sometimes
+ * label a video as an image MIME (or the reverse) after encrypt/decrypt, and
+ * extensionless cache files often have a null ContentResolver MIME.
+ */
+internal fun decodeAttachmentPreview(
+    context: Context,
+    uri: Uri,
+    preferVideo: Boolean,
+    maxSide: Int = 1024,
+): Bitmap? {
+    return if (preferVideo) {
+        decodeVideoFrameRespectingRotation(context, uri, maxSide = maxSide)
+            ?: decodeBitmapRespectingExif(context, uri, maxSide = maxSide)
+    } else {
+        decodeBitmapRespectingExif(context, uri, maxSide = maxSide)
+            ?: decodeVideoFrameRespectingRotation(context, uri, maxSide = maxSide)
+    }
+}
+
+/**
  * Video frames from [MediaMetadataRetriever] may be sensor-oriented or already
  * display-oriented (OEM/API dependent). Use [uprightRetrievedVideoFrame] with
  * coded size + [MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION].

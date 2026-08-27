@@ -64,36 +64,47 @@ public data class ChatAttachment(
     /** True when MIME metadata or, as a fallback, the extension describes audio. */
     public val isAudio: Boolean get() = attachmentKind() == AttachmentKind.Audio
 
+    /**
+     * Matches ChatKit iOS (`ChatAttachment.isImage` / `isVideo` / `isAudio`):
+     * media MIME prefixes win, otherwise filename extension is used even when
+     * MIME is generic (`application/octet-stream`) or missing. Non-media MIME
+     * must not force Document — that was dropping decrypt cache files that iOS
+     * still showed as photo/video bubbles.
+     */
     internal fun attachmentKind(): AttachmentKind {
-        val mimeKind = when {
-            mimeType?.startsWith("image/", ignoreCase = true) == true -> AttachmentKind.Image
-            mimeType?.startsWith("video/", ignoreCase = true) == true -> AttachmentKind.Video
-            mimeType?.startsWith("audio/", ignoreCase = true) == true -> AttachmentKind.Audio
-            mimeType != null -> AttachmentKind.Document
-            else -> null
+        when {
+            mimeType?.startsWith("image/", ignoreCase = true) == true -> return AttachmentKind.Image
+            mimeType?.startsWith("video/", ignoreCase = true) == true -> return AttachmentKind.Video
+            mimeType?.startsWith("audio/", ignoreCase = true) == true -> return AttachmentKind.Audio
         }
-        if (mimeKind != null) return mimeKind
         val extension = fileName.substringBefore('?').substringAfterLast('.', "").lowercase()
         return when (extension) {
             "jpg", "jpeg", "png", "webp", "heic", "gif", "avif" -> AttachmentKind.Image
             "mov", "mp4", "m4v", "avi", "webm", "mkv" -> AttachmentKind.Video
-            "m4a", "mp3", "aac", "wav", "ogg", "opus", "flac" -> AttachmentKind.Audio
+            "m4a", "mp3", "aac", "wav", "ogg", "opus", "flac", "caf" -> AttachmentKind.Audio
             else -> AttachmentKind.Document
         }
     }
 }
 
-/** Upload state rendered by an attachment bubble. */
+/** Upload / download state rendered by an attachment bubble. */
 public sealed interface TransferState {
     /** In-flight upload progress. Rendering clamps [progress] to `0f..1f`. */
     @Immutable
     public data class Uploading(public val progress: Float) : TransferState
 
+    /** In-flight download progress. Rendering clamps [progress] to `0f..1f`. */
+    @Immutable
+    public data class Downloading(public val progress: Float = 0f) : TransferState
+
     /** Attachment is available. */
     public data object Uploaded : TransferState
 
-    /** Attachment upload failed. */
+    /** Outgoing upload / send failed — bubble shows an upload affordance to retry. */
     public data object Failed : TransferState
+
+    /** Incoming download failed — bubble shows a download affordance to retry. */
+    public data object DownloadFailed : TransferState
 }
 
 /**
@@ -153,8 +164,17 @@ public interface AttachmentResolver {
 
 internal enum class AttachmentKind { Image, Video, Audio, Document }
 
-internal fun TransferState.clampedProgress(): Float? =
-    (this as? TransferState.Uploading)?.progress?.coerceIn(0f, 1f)
+internal fun TransferState.clampedProgress(): Float? = when (this) {
+    is TransferState.Uploading -> progress.coerceIn(0f, 1f)
+    is TransferState.Downloading -> progress.coerceIn(0f, 1f)
+    else -> null
+}
+
+internal val TransferState.isTransferring: Boolean
+    get() = this is TransferState.Uploading || this is TransferState.Downloading
+
+internal val TransferState.isFailedTransfer: Boolean
+    get() = this is TransferState.Failed || this is TransferState.DownloadFailed
 
 internal fun ChatMessage.canEdit(now: Instant, windowMillis: Long): Boolean =
     direction == MessageDirection.Outgoing && text.isNotBlank() && windowMillis >= 0 &&
