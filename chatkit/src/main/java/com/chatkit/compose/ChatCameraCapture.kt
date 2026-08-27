@@ -37,7 +37,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -45,12 +47,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -79,10 +83,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,6 +99,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -100,6 +107,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -117,11 +125,14 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Full-screen chat camera: live capture with CameraX, then inline review with caption/send.
@@ -373,6 +384,8 @@ private fun LiveCameraScreen(
             val photoMode = viewModel.captureMode == CaptureMode.PHOTO
             // Match iOS: 4:3 photo / 16:9 video use cases (portrait viewfinder is 3:4 / 9:16).
             val sensorAspect = if (photoMode) AspectRatio.RATIO_4_3 else AspectRatio.RATIO_16_9
+            val rotation = preview.display?.rotation
+                ?: android.view.Surface.ROTATION_0
             val resolutionSelector = ResolutionSelector.Builder()
                 .setAspectRatioStrategy(
                     AspectRatioStrategy(
@@ -383,6 +396,7 @@ private fun LiveCameraScreen(
                 .build()
             val previewUseCase = Preview.Builder()
                 .setResolutionSelector(resolutionSelector)
+                .setTargetRotation(rotation)
                 .build()
                 .also { it.surfaceProvider = preview.surfaceProvider }
 
@@ -394,6 +408,7 @@ private fun LiveCameraScreen(
                 val image = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .setResolutionSelector(resolutionSelector)
+                    .setTargetRotation(rotation)
                     .build()
                 imageCapture = image
                 videoCapture = null
@@ -404,7 +419,9 @@ private fun LiveCameraScreen(
                     val recorder = Recorder.Builder()
                         .setQualitySelector(QualitySelector.from(Quality.HD))
                         .build()
-                    val video = VideoCapture.withOutput(recorder)
+                    val video = VideoCapture.Builder(recorder)
+                        .setTargetRotation(rotation)
+                        .build()
                     videoCapture = video
                     groupBuilder.addUseCase(video)
                 } else {
@@ -804,9 +821,6 @@ private fun ReviewScreen(
                         onTrimChanged = { start, end ->
                             viewModel.updateTrim(start, end, capture.durationSeconds ?: 0.0)
                         },
-                        onTrimMoved = { delta ->
-                            viewModel.moveTrim(delta, capture.durationSeconds ?: 0.0)
-                        },
                     )
                 }
             }
@@ -872,7 +886,6 @@ private fun VideoReviewPlayer(
     trimRange: VideoTrimRange,
     totalSeconds: Double,
     onTrimChanged: (Double, Double) -> Unit,
-    onTrimMoved: (Double) -> Unit,
 ) {
     val context = LocalContext.current
     val player = remember {
@@ -884,33 +897,48 @@ private fun VideoReviewPlayer(
         }
     }
     var isPlaying by remember { mutableStateOf(false) }
+    var playheadSeconds by remember { mutableFloatStateOf(trimRange.startSeconds.toFloat()) }
+    var isScrubbing by remember { mutableStateOf(false) }
 
     DisposableEffect(file) {
         onDispose { player.release() }
     }
 
-    LaunchedEffect(trimRange.startSeconds, trimRange.endSeconds) {
-        val startMs = (trimRange.startSeconds * 1000).toLong()
-        val endMs = (trimRange.endSeconds * 1000).toLong()
-        player.setMediaItem(
-            MediaItem.Builder()
-                .setUri(Uri.fromFile(file))
-                .setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(startMs)
-                        .setEndPositionMs(endMs)
-                        .build(),
-                )
-                .build(),
-        )
-        player.prepare()
-        player.seekTo(0)
-        isPlaying = false
+    // Keep a single prepared media item; seek instead of reloading on every trim tweak.
+    fun seekToSeconds(seconds: Double, pause: Boolean = true) {
+        val ms = (seconds * 1000.0).toLong().coerceAtLeast(0L)
+        player.seekTo(ms)
+        playheadSeconds = seconds.toFloat()
+        if (pause) {
+            player.pause()
+            isPlaying = false
+        }
+    }
+
+    LaunchedEffect(trimRange.startSeconds) {
+        if (!isScrubbing && !isPlaying) {
+            seekToSeconds(trimRange.startSeconds)
+        }
+    }
+
+    LaunchedEffect(isPlaying, trimRange.endSeconds, trimRange.startSeconds) {
+        if (!isPlaying) return@LaunchedEffect
+        while (isActive && isPlaying) {
+            val posSec = player.currentPosition / 1000.0
+            playheadSeconds = posSec.toFloat()
+            if (posSec >= trimRange.endSeconds - 0.04) {
+                player.pause()
+                seekToSeconds(trimRange.startSeconds)
+                isPlaying = false
+                break
+            }
+            delay(32)
+        }
     }
 
     val frames by produceState(emptyList(), file.absolutePath) {
         value = withContext(Dispatchers.IO) {
-            VideoTrimExporter.filmstripFrames(file, frameCount = 10)
+            VideoTrimExporter.filmstripFrames(file, frameCount = 18)
         }
     }
 
@@ -928,6 +956,7 @@ private fun VideoReviewPlayer(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         useController = false
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                         this.player = player
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -952,8 +981,11 @@ private fun VideoReviewPlayer(
                             player.pause()
                             isPlaying = false
                         } else {
-                            if (player.playbackState == Player.STATE_ENDED) {
-                                player.seekTo(0)
+                            val startMs = (trimRange.startSeconds * 1000).toLong()
+                            if (player.currentPosition < startMs ||
+                                player.currentPosition >= (trimRange.endSeconds * 1000).toLong() - 40
+                            ) {
+                                player.seekTo(startMs)
                             }
                             player.play()
                             isPlaying = true
@@ -971,10 +1003,11 @@ private fun VideoReviewPlayer(
         }
 
         Text(
-            text = formatDuration(trimRange.durationSeconds),
-            color = Color.White.copy(alpha = 0.8f),
+            text = "${formatDuration(playheadSeconds.toDouble())} / ${formatDuration(trimRange.durationSeconds)}",
+            color = Color.White.copy(alpha = 0.85f),
             fontSize = 13.sp,
-            modifier = Modifier.padding(vertical = 6.dp),
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
         )
 
         if (totalSeconds > 0.0) {
@@ -982,44 +1015,59 @@ private fun VideoReviewPlayer(
                 frames = frames,
                 totalSeconds = totalSeconds,
                 range = trimRange,
+                playheadSeconds = playheadSeconds.toDouble(),
                 onTrimChanged = onTrimChanged,
-                onTrimMoved = onTrimMoved,
-                onSeekBoundary = { seconds ->
-                    player.seekTo((seconds * 1000).toLong().coerceAtLeast(0L))
-                    isPlaying = false
-                    player.pause()
+                onScrub = { seconds, dragging ->
+                    isScrubbing = dragging
+                    seekToSeconds(seconds, pause = true)
                 },
                 trimModifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
             )
         }
     }
 }
+
+private enum class TrimDragMode { Start, End, Window }
 
 @Composable
 private fun VideoTrimBar(
     frames: List<android.graphics.Bitmap>,
     totalSeconds: Double,
     range: VideoTrimRange,
+    playheadSeconds: Double,
     onTrimChanged: (Double, Double) -> Unit,
-    onTrimMoved: (Double) -> Unit,
-    onSeekBoundary: (Double) -> Unit,
+    onScrub: (seconds: Double, dragging: Boolean) -> Unit,
     trimModifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier = trimModifier.height(56.dp)) {
-        val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-        val startFraction = (range.startSeconds / totalSeconds).toFloat().coerceIn(0f, 1f)
-        val endFraction = (range.endSeconds / totalSeconds).toFloat().coerceIn(0f, 1f)
+    val density = LocalDensity.current
+    val handleWidth = 16.dp
+    val handleWidthPx = with(density) { handleWidth.toPx() }
+    val hitSlopPx = with(density) { 28.dp.toPx() }
+    val barHeight = 64.dp
+    val latestRange by rememberUpdatedState(range)
+    val latestOnTrimChanged by rememberUpdatedState(onTrimChanged)
+    val latestOnScrub by rememberUpdatedState(onScrub)
 
-        androidx.compose.foundation.layout.Row(
-            Modifier.fillMaxSize(),
-        ) {
+    BoxWithConstraints(
+        modifier = trimModifier
+            .height(barHeight)
+            .clip(RoundedCornerShape(10.dp)),
+    ) {
+        val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val safeTotal = totalSeconds.coerceAtLeast(0.001)
+        val startFraction = (range.startSeconds / safeTotal).toFloat().coerceIn(0f, 1f)
+        val endFraction = (range.endSeconds / safeTotal).toFloat().coerceIn(0f, 1f)
+        val playFraction = (playheadSeconds / safeTotal).toFloat().coerceIn(0f, 1f)
+
+        // Filmstrip
+        Row(modifier = Modifier.fillMaxSize()) {
             if (frames.isEmpty()) {
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Color.DarkGray),
+                        .background(Color(0xFF2C2C2E)),
                 )
             } else {
                 for (frame in frames) {
@@ -1035,55 +1083,186 @@ private fun VideoTrimBar(
             }
         }
 
+        // Dim unselected regions (WhatsApp style)
+        if (startFraction > 0f) {
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .fillMaxWidth(startFraction)
+                    .background(Color.Black.copy(alpha = 0.55f)),
+            )
+        }
+        if (endFraction < 1f) {
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .fillMaxWidth(1f - endFraction)
+                    .background(Color.Black.copy(alpha = 0.55f)),
+            )
+        }
+
+        // Selection frame
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .padding(
+                    start = maxWidth * startFraction,
+                    end = maxWidth * (1f - endFraction),
+                )
+                .border(2.5.dp, Color.White, RoundedCornerShape(8.dp)),
+        )
+
+        // Playhead
+        Box(
+            Modifier
+                .offset {
+                    IntOffset(
+                        x = ((playFraction * widthPx) - with(density) { 1.dp.toPx() }).roundToInt(),
+                        y = 0,
+                    )
+                }
+                .width(2.dp)
+                .fillMaxHeight()
+                .background(Color(0xFFFF3B30)),
+        )
+
+        // Start handle
+        TrimHandle(
+            leading = true,
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = ((startFraction * widthPx) - handleWidthPx / 2f).roundToInt(),
+                        y = 0,
+                    )
+                }
+                .width(handleWidth)
+                .fillMaxHeight()
+                .semantics { contentDescription = "Trim start" },
+        )
+        // End handle
+        TrimHandle(
+            leading = false,
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        x = ((endFraction * widthPx) - handleWidthPx / 2f).roundToInt(),
+                        y = 0,
+                    )
+                }
+                .width(handleWidth)
+                .fillMaxHeight()
+                .semantics { contentDescription = "Trim end" },
+        )
+
+        // Unified gesture layer — keep pointerInput keys stable so drag is not cancelled mid-scrub.
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(start = maxWidth * startFraction, end = maxWidth * (1f - endFraction))
-                .border(2.dp, Color.White, RoundedCornerShape(4.dp))
-                .pointerInput(totalSeconds, range) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        val delta = (dragAmount.x / widthPx) * totalSeconds
-                        onTrimMoved(delta)
+                .pointerInput(safeTotal) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val w = size.width.toFloat().coerceAtLeast(1f)
+                        fun xToSeconds(x: Float): Double =
+                            ((x / w).coerceIn(0f, 1f) * safeTotal)
+
+                        val rangeAtDown = latestRange
+                        val startX = (rangeAtDown.startSeconds / safeTotal).toFloat() * w
+                        val endX = (rangeAtDown.endSeconds / safeTotal).toFloat() * w
+                        val x = down.position.x
+                        val mode = when {
+                            abs(x - startX) <= hitSlopPx -> TrimDragMode.Start
+                            abs(x - endX) <= hitSlopPx -> TrimDragMode.End
+                            x in startX..endX -> TrimDragMode.Window
+                            else -> null
+                        } ?: return@awaitEachGesture
+
+                        var localStart = rangeAtDown.startSeconds
+                        var localEnd = rangeAtDown.endSeconds
+                        val windowStartAtDown = localStart
+                        val windowEndAtDown = localEnd
+                        val downX = x
+
+                        latestOnScrub(
+                            when (mode) {
+                                TrimDragMode.Start -> localStart
+                                TrimDragMode.End -> localEnd
+                                TrimDragMode.Window -> xToSeconds(x)
+                            },
+                            true,
+                        )
+
+                        drag(down.id) { change ->
+                            change.consume()
+                            val currentX = change.position.x
+                            when (mode) {
+                                TrimDragMode.Start -> {
+                                    localStart = xToSeconds(currentX)
+                                    latestOnTrimChanged(localStart, localEnd)
+                                    latestOnScrub(localStart, true)
+                                }
+                                TrimDragMode.End -> {
+                                    localEnd = xToSeconds(currentX)
+                                    latestOnTrimChanged(localStart, localEnd)
+                                    latestOnScrub(localEnd, true)
+                                }
+                                TrimDragMode.Window -> {
+                                    val delta = ((currentX - downX) / w) * safeTotal
+                                    val moved = moveTrimWindow(
+                                        VideoTrimRange(windowStartAtDown, windowEndAtDown),
+                                        delta,
+                                        safeTotal,
+                                    )
+                                    localStart = moved.startSeconds
+                                    localEnd = moved.endSeconds
+                                    latestOnTrimChanged(localStart, localEnd)
+                                    latestOnScrub(
+                                        xToSeconds(currentX).coerceIn(localStart, localEnd),
+                                        true,
+                                    )
+                                }
+                            }
+                        }
+                        latestOnScrub(
+                            when (mode) {
+                                TrimDragMode.Start -> localStart
+                                TrimDragMode.End -> localEnd
+                                TrimDragMode.Window -> localStart
+                            },
+                            false,
+                        )
                     }
                 },
         )
+    }
+}
 
+@Composable
+private fun TrimHandle(
+    leading: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .background(
+                Color.White,
+                RoundedCornerShape(
+                    topStart = if (leading) 8.dp else 0.dp,
+                    bottomStart = if (leading) 8.dp else 0.dp,
+                    topEnd = if (leading) 0.dp else 8.dp,
+                    bottomEnd = if (leading) 0.dp else 8.dp,
+                ),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
         Box(
             Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = (maxWidth * startFraction - 12.dp).coerceAtLeast(0.dp))
-                .size(width = 24.dp, height = 56.dp)
-                .semantics { contentDescription = "Trim start" }
-                .pointerInput(totalSeconds, range.endSeconds) {
-                    detectDragGestures { change, _ ->
-                        change.consume()
-                        val fraction = ((change.position.x + size.width / 2f) / widthPx)
-                            .coerceIn(0f, 1f)
-                        val seconds = fraction * totalSeconds
-                        onTrimChanged(seconds, range.endSeconds)
-                        onSeekBoundary(seconds)
-                    }
-                }
-                .background(Color.White, RoundedCornerShape(4.dp)),
-        )
-        Box(
-            Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = (maxWidth * endFraction - 12.dp).coerceAtLeast(0.dp))
-                .size(width = 24.dp, height = 56.dp)
-                .semantics { contentDescription = "Trim end" }
-                .pointerInput(totalSeconds, range.startSeconds) {
-                    detectDragGestures { change, _ ->
-                        change.consume()
-                        val fraction = ((change.position.x + size.width / 2f) / widthPx)
-                            .coerceIn(0f, 1f)
-                        val seconds = fraction * totalSeconds
-                        onTrimChanged(range.startSeconds, seconds)
-                        onSeekBoundary(seconds)
-                    }
-                }
-                .background(Color.White, RoundedCornerShape(4.dp)),
+                .width(3.dp)
+                .height(22.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color.Black.copy(alpha = 0.35f)),
         )
     }
 }

@@ -22,6 +22,9 @@ internal object ChatCameraFiles {
         return id to file
     }
 
+    fun videoPosterFile(cacheDir: File, id: String): File =
+        File(cacheDir, "$PREFIX$id-poster.jpg")
+
     fun deleteQuietly(file: File?) {
         if (file == null) return
         runCatching { if (file.exists()) file.delete() }
@@ -69,12 +72,22 @@ internal object ChatCameraFiles {
 
     fun makeOptimisticAttachment(media: ChatMediaAttachment): ChatAttachment {
         val isVideo = media.mediaType == MediaType.Video
+        val posterUri = if (isVideo) {
+            media.localFile?.let { video ->
+                val dir = video.parentFile ?: return@let null
+                val poster = videoPosterFile(dir, media.id)
+                if (writeUprightVideoPoster(video, poster)) poster.toUri() else null
+            }
+        } else {
+            null
+        }
         return ChatAttachment(
             id = media.id,
             fileName = if (isVideo) "video.mp4" else "photo.jpg",
             mimeType = if (isVideo) "video/mp4" else "image/jpeg",
             durationMillis = media.durationMillis,
             localUri = media.resolvedUri(),
+            posterUri = posterUri,
             transferState = TransferState.Uploading(0f),
         )
     }

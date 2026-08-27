@@ -368,11 +368,19 @@ private fun MediaAttachmentTile(
         }
     }
     val displayUri = if (isVideo) (posterUri ?: resolvedUri) else resolvedUri
-    val bitmap by produceState<ImageBitmap?>(null, displayUri) {
+    val bitmap by produceState<ImageBitmap?>(null, displayUri, isVideo) {
         value = if (displayUri != null) {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    decodeBitmapRespectingExif(context, displayUri)?.asImageBitmap()
+                    val decoded = if (isVideo && posterUri == null) {
+                        decodeVideoFrameRespectingRotation(context, displayUri, maxSide = 1024)
+                    } else if (isVideo) {
+                        decodeBitmapRespectingExif(context, displayUri, maxSide = 1024)
+                            ?: decodeVideoFrameRespectingRotation(context, displayUri, maxSide = 1024)
+                    } else {
+                        decodeBitmapRespectingExif(context, displayUri)
+                    }
+                    decoded?.asImageBitmap()
                 }.getOrNull()
             }
         } else {

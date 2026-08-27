@@ -424,7 +424,11 @@ internal fun MessageBubble(
             }
         }
         // Explicit width like iOS bubbleWidthConstraint — same for sent and received.
+        // Visual media always uses the max bubble width so a short caption cannot shrink
+        // the photo/video tile (iOS / WhatsApp behavior).
+        val hasVisualMedia = message.attachments.any { it.isImage || it.isVideo }
         val bubbleWidth = when {
+            hasVisualMedia -> maxBubble
             captionLayout != null -> captionLayout.bubbleWidth
             hasMedia -> maxBubble
             else -> ChatBubbleMetrics.MinimumWidth

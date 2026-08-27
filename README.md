@@ -39,11 +39,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.2")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.3")
 }
 ```
 
-For development snapshots, replace `v1.6.2` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.3` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -120,13 +120,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.2`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.3`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.3 | WhatsApp-style video trim scrubbing, upright video posters, media bubbles keep max width |
 | 1.6.2 | Camera WYSIWYG 4:3/16:9 capture, fresh session after send, polished Photos/Videos picker tabs |
 | 1.6.1 | Fix camera review caption field staying above the keyboard |
 | 1.6.0 | Full-screen CameraX capture with photo/video review, caption, trim, and `localFile` host contract |

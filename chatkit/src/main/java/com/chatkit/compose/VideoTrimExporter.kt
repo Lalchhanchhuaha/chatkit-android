@@ -86,6 +86,9 @@ internal object VideoTrimExporter {
                 ?.toLongOrNull()
                 ?.coerceAtLeast(1L)
                 ?: return emptyList()
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toIntOrNull()
+                ?: 0
             val frames = ArrayList<Bitmap>(frameCount)
             for (i in 0 until frameCount) {
                 val timeMs = if (frameCount == 1) {
@@ -97,7 +100,8 @@ internal object VideoTrimExporter {
                     timeMs * 1000L,
                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                 ) ?: continue
-                frames += scaleDown(frame, maxSide)
+                val upright = applyRotationDegrees(frame, rotation)
+                frames += scaleDown(upright, maxSide)
             }
             frames
         } catch (_: Exception) {

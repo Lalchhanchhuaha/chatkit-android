@@ -5,8 +5,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.max
 
 /**
@@ -37,6 +40,83 @@ internal fun decodeBitmapRespectingExif(
         if (decoded != null) return decoded
     }
     return decodeBitmapWithFactory(context, uri, maxSide)
+}
+
+/**
+ * Video frames from [MediaMetadataRetriever] are often sensor-oriented; apply
+ * [MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION] so bubble posters match
+ * what the user recorded.
+ */
+internal fun decodeVideoFrameRespectingRotation(
+    context: Context,
+    uri: Uri,
+    maxSide: Int = 0,
+    timeUs: Long = 0L,
+): Bitmap? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        runCatching { retriever.setDataSource(context, uri) }
+            .recoverCatching {
+                val path = uri.path
+                if (uri.scheme == "file" && path != null) {
+                    retriever.setDataSource(path)
+                } else {
+                    throw it
+                }
+            }
+            .getOrElse { return null }
+        val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            ?: return null
+        val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+            ?.toIntOrNull()
+            ?: 0
+        val upright = applyRotationDegrees(frame, rotation)
+        if (maxSide > 0) scaleDownBitmap(upright, maxSide) else upright
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
+
+internal fun decodeVideoFrameRespectingRotation(
+    file: File,
+    maxSide: Int = 0,
+    timeUs: Long = 0L,
+): Bitmap? {
+    if (!file.exists()) return null
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(file.absolutePath)
+        val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            ?: return null
+        val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+            ?.toIntOrNull()
+            ?: 0
+        val upright = applyRotationDegrees(frame, rotation)
+        if (maxSide > 0) scaleDownBitmap(upright, maxSide) else upright
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
+
+/** Writes an upright JPEG poster next to a camera video for optimistic bubble display. */
+internal fun writeUprightVideoPoster(videoFile: File, posterFile: File, maxSide: Int = 720): Boolean {
+    val frame = decodeVideoFrameRespectingRotation(videoFile, maxSide = maxSide) ?: return false
+    return try {
+        posterFile.parentFile?.mkdirs()
+        FileOutputStream(posterFile).use { out ->
+            frame.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        }
+        true
+    } catch (_: Exception) {
+        ChatCameraFiles.deleteQuietly(posterFile)
+        false
+    } finally {
+        if (!frame.isRecycled) frame.recycle()
+    }
 }
 
 private fun decodeBitmapWithFactory(
@@ -92,4 +172,24 @@ internal fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
     val upright = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     if (upright !== bitmap) bitmap.recycle()
     return upright
+}
+
+internal fun applyRotationDegrees(bitmap: Bitmap, degrees: Int): Bitmap {
+    val normalized = ((degrees % 360) + 360) % 360
+    if (normalized == 0) return bitmap
+    val matrix = Matrix().apply { setRotate(normalized.toFloat()) }
+    val upright = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    if (upright !== bitmap) bitmap.recycle()
+    return upright
+}
+
+private fun scaleDownBitmap(bitmap: Bitmap, maxSide: Int): Bitmap {
+    val longest = max(bitmap.width, bitmap.height).coerceAtLeast(1)
+    if (longest <= maxSide) return bitmap
+    val scale = maxSide.toFloat() / longest
+    val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+    val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+    val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
+    if (scaled !== bitmap) bitmap.recycle()
+    return scaled
 }
