@@ -10,6 +10,7 @@ import android.provider.Settings
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -43,11 +44,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -95,6 +101,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
@@ -185,7 +192,31 @@ private fun ChatCameraDestination(
     val context = LocalContext.current
     val view = LocalView.current
     val activity = context as? Activity
+    val dialogWindow = (view.parent as? DialogWindowProvider)?.window
 
+    DisposableEffect(dialogWindow) {
+        val previousMode = dialogWindow?.attributes?.softInputMode
+        // Edge-to-edge dialog still needs adjustResize so IME insets are dispatched.
+        dialogWindow?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        val controller = dialogWindow?.let { WindowInsetsControllerCompat(it, view) }
+        val previousAppearance = controller?.isAppearanceLightStatusBars
+        if (dialogWindow != null) {
+            WindowCompat.setDecorFitsSystemWindows(dialogWindow, false)
+            controller?.isAppearanceLightStatusBars = false
+            controller?.isAppearanceLightNavigationBars = false
+        }
+        onDispose {
+            if (previousMode != null) {
+                dialogWindow.setSoftInputMode(previousMode)
+            }
+            if (previousAppearance != null) {
+                controller.isAppearanceLightStatusBars = previousAppearance
+                controller.isAppearanceLightNavigationBars = previousAppearance
+            }
+        }
+    }
+
+    // Keep activity bars consistent when the dialog is shown.
     DisposableEffect(Unit) {
         val window = activity?.window
         val controller = window?.let { WindowInsetsControllerCompat(it, view) }
@@ -689,7 +720,8 @@ private fun ReviewScreen(
             .fillMaxSize()
             .background(Color.Black)
             .statusBarsPadding()
-            .navigationBarsPadding(),
+            // Lift the caption/send row above the keyboard without double-counting nav bars.
+            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
     ) {
         Row(
             modifier = Modifier
