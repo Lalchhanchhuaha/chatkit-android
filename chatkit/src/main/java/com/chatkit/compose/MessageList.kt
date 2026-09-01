@@ -10,7 +10,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -23,6 +27,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -31,6 +36,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.imeAnimationSource
 import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,19 +45,22 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -60,10 +69,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -77,8 +90,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import kotlin.math.roundToInt
 
@@ -98,16 +114,15 @@ internal fun MessageList(
     listState: LazyListState,
     showsSender: Boolean,
     theme: ChatTheme,
-    isTyping: Boolean,
-    typingIndicatorText: String,
     isViewingNewest: Boolean,
     unreadIncomingCount: Int,
     onTranscriptTap: () -> Unit,
     onMessageRetry: (String) -> Unit,
-    modificationWindowMillis: Long,
-    onEditMessage: ((String, String) -> Unit)?,
-    onDeleteMessage: ((String) -> Unit)?,
     onReplyMessage: ((ChatMessage) -> Unit)?,
+    isMessageSelectionMode: Boolean,
+    selectedMessageIds: Set<String>,
+    onMessageLongPress: ((ChatMessage) -> Unit)?,
+    onMessageSelectionTap: (ChatMessage) -> Unit,
     onLoadPreviousMessages: (() -> Unit)?,
     loadPreviousThreshold: Int,
     onUnreadIncomingCountChanged: (Int) -> Unit,
@@ -122,15 +137,16 @@ internal fun MessageList(
     onRetryAttachmentDownload: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
-    onMessageEditingChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // Keep index 0 as the newest row. reverseLayout anchors that row to the
     // visual bottom without rotating the list (which would also invert gestures).
     // Stable keys let animateItem lift existing rows when a new row is inserted.
-    val messageSnapshot = messages.toList()
+    // ChatView already supplies an immutable snapshot. Avoid copying the full transcript
+    // again on every composer/typing recomposition.
+    val messageSnapshot = messages
     val chronologicalItems = remember(messageSnapshot) { buildTranscriptItems(messageSnapshot) }
-    val invertedItems = remember(chronologicalItems) { chronologicalItems.asReversed().toList() }
+    val invertedItems = remember(chronologicalItems) { chronologicalItems.asReversed() }
     var trackedLastId by remember { mutableStateOf(messageSnapshot.lastOrNull()?.id) }
 
     LaunchedEffect(
@@ -171,7 +187,7 @@ internal fun MessageList(
             // Stable keys keep the previously visible row anchored when index 0
             // is inserted. Wait until that row is laid out, then scroll so the
             // new bottom row moves into view while existing rows slide upward.
-            val renderedItemCount = invertedItems.size + if (isTyping && isViewingNewest) 1 else 0
+            val renderedItemCount = invertedItems.size
             snapshotFlow { listState.layoutInfo.totalItemsCount }
                 .first { it == renderedItemCount }
             listState.animateScrollToItem(0)
@@ -208,13 +224,6 @@ internal fun MessageList(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
         ) {
-            if (isTyping && isViewingNewest) {
-                item(key = "chatkit-typing") {
-                    AnimatedListRow {
-                        TypingIndicatorBubble(typingIndicatorText, theme)
-                    }
-                }
-            }
             items(
                 items = invertedItems,
                 key = { it.stableKey() },
@@ -227,12 +236,15 @@ internal fun MessageList(
                             showsSender = showsSender,
                             theme = theme,
                             onRetry = { onMessageRetry(item.message.id) },
-                            modificationWindowMillis = modificationWindowMillis,
-                            onEditMessage = onEditMessage,
-                            onDeleteMessage = onDeleteMessage,
                             onReply = onReplyMessage?.let { reply ->
                                 { reply(item.message) }
                             },
+                            isMessageSelectionMode = isMessageSelectionMode,
+                            isSelected = item.message.id in selectedMessageIds,
+                            onLongPress = onMessageLongPress?.let { callback ->
+                                { callback(item.message) }
+                            },
+                            onSelectionTap = { onMessageSelectionTap(item.message) },
                             attachmentContent = attachmentContent,
                             automaticallyLoadsImages = automaticallyLoadsImages,
                             attachmentResolver = attachmentResolver,
@@ -241,7 +253,6 @@ internal fun MessageList(
                             onRetryAttachmentDownload = onRetryAttachmentDownload,
                             audioPlayer = audioPlayer,
                             deliveryStatusContent = deliveryStatusContent,
-                            onEditingChanged = onMessageEditingChanged,
                         )
                     }
                 }
@@ -333,10 +344,11 @@ internal fun MessageBubble(
     showsSender: Boolean,
     theme: ChatTheme,
     onRetry: () -> Unit,
-    modificationWindowMillis: Long,
-    onEditMessage: ((String, String) -> Unit)?,
-    onDeleteMessage: ((String) -> Unit)?,
     onReply: (() -> Unit)?,
+    isMessageSelectionMode: Boolean,
+    isSelected: Boolean,
+    onLongPress: (() -> Unit)?,
+    onSelectionTap: () -> Unit,
     attachmentContent: (@Composable (ChatAttachment) -> Unit)?,
     automaticallyLoadsImages: Boolean = true,
     attachmentResolver: AttachmentResolver = AttachmentResolver.None,
@@ -345,22 +357,10 @@ internal fun MessageBubble(
     onRetryAttachmentDownload: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
-    onEditingChanged: (Boolean) -> Unit = {},
 ) {
     val incoming = message.isIncoming
     val corner = if (theme.bubbleCornerRadius == Dp.Unspecified) 12.dp else theme.bubbleCornerRadius
     val bubbleShape = messageBubbleShape(incoming, corner)
-    var showActions by remember { mutableStateOf(false) }
-    var showEditDialog by remember { mutableStateOf(false) }
-
-    LaunchedEffect(showEditDialog) {
-        onEditingChanged(showEditDialog)
-    }
-    DisposableEffect(Unit) {
-        onDispose { onEditingChanged(false) }
-    }
-    var editedText by remember(message.id, message.text) { mutableStateOf(message.text) }
-    val canEdit = onEditMessage != null && message.canEdit(Instant.now(), modificationWindowMillis)
     val maximumSwipe = with(LocalDensity.current) { 76.dp.toPx() }
     val replyThreshold = with(LocalDensity.current) { 52.dp.toPx() }
     var swipeTarget by remember(message.id) { mutableFloatStateOf(0f) }
@@ -380,8 +380,26 @@ internal fun MessageBubble(
     val textColor = if (incoming) theme.incomingTextColor else theme.outgoingTextColor
     val density = LocalDensity.current
     val textMeasurer = rememberTextMeasurer()
+    val selectionTouchModifier = if (!isMessageSelectionMode) {
+        Modifier
+    } else {
+        Modifier.pointerInput(message.id) {
+            awaitEachGesture {
+                val down = awaitFirstDown(
+                    requireUnconsumed = false,
+                    pass = PointerEventPass.Initial,
+                )
+                down.consume()
+                val up = waitForUpOrCancellation(pass = PointerEventPass.Initial)
+                if (up != null) {
+                    up.consume()
+                    onSelectionTap()
+                }
+            }
+        }
+    }
 
-    val swipeModifier = if (onReply == null) {
+    val swipeModifier = if (onReply == null || isMessageSelectionMode) {
         Modifier
     } else {
         Modifier.draggable(
@@ -433,11 +451,16 @@ internal fun MessageBubble(
         // Visual media always uses the max bubble width so a short caption cannot shrink
         // the photo/video tile (iOS / WhatsApp behavior).
         val hasVisualMedia = message.attachments.any { it.isImage || it.isVideo }
-        val bubbleWidth = when {
+        val contentBubbleWidth = when {
             hasVisualMedia -> maxBubble
             captionLayout != null -> captionLayout.bubbleWidth
             hasMedia -> maxBubble
             else -> ChatBubbleMetrics.MinimumWidth
+        }
+        val bubbleWidth = if (message.replyToMessageId != null) {
+            maxOf(contentBubbleWidth, minOf(maxBubble, 240.dp))
+        } else {
+            contentBubbleWidth
         }
 
         if (swipeOffset > 4f) {
@@ -451,12 +474,18 @@ internal fun MessageBubble(
         Row(
             Modifier
                 .fillMaxWidth()
+                .background(if (isSelected) theme.accentColor.copy(alpha = 0.10f) else Color.Transparent)
                 .offset { IntOffset(swipeOffset.roundToInt(), 0) }
                 .then(swipeModifier),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             // iOS HStack: flexible spacer pushes outgoing trailing / incoming leading.
             if (!incoming) {
                 Spacer(Modifier.widthIn(min = sideInset).weight(1f))
+            }
+            if (isMessageSelectionMode) {
+                MessageSelectionCheckmark(isSelected = isSelected, theme = theme)
+                Spacer(Modifier.width(8.dp))
             }
             Column(horizontalAlignment = Alignment.Start) {
                 if (showsSender && incoming && !message.senderName.isNullOrBlank()) {
@@ -484,15 +513,18 @@ internal fun MessageBubble(
                                 Modifier
                             },
                         )
-                        .pointerInput(message.id, canEdit, onDeleteMessage, onReply) {
+                        .then(selectionTouchModifier)
+                        .pointerInput(message.id, isMessageSelectionMode, onLongPress, onReply) {
                             detectTapGestures(
                                 onTap = {
-                                    if (!incoming && message.deliveryStatus == DeliveryStatus.Failed) onRetry()
+                                    if (isMessageSelectionMode) {
+                                        onSelectionTap()
+                                    } else if (!incoming && message.deliveryStatus == DeliveryStatus.Failed) {
+                                        onRetry()
+                                    }
                                 },
                                 onLongPress = {
-                                    if (onReply != null || canEdit || onDeleteMessage != null) {
-                                        showActions = true
-                                    }
+                                    onLongPress?.invoke()
                                 },
                             )
                         },
@@ -501,27 +533,27 @@ internal fun MessageBubble(
                         it.isImage || it.isVideo || it.isAudio
                     }
                     if (message.replyToMessageId != null) {
-                        Column(
+                        val replyWasIncoming = message.replyToWasIncoming
+                            ?: !message.replyToSenderName.equals("You", ignoreCase = true)
+                        MessageReplyQuote(
+                            senderName = message.replyToSenderName?.takeIf(String::isNotBlank)
+                                ?: if (replyWasIncoming) "Contact" else "You",
+                            previewText = message.replyToMessageText
+                                ?.takeIf(String::isNotBlank)
+                                ?: message.replyToAttachment?.fileName
+                                ?: "Message",
+                            wasIncoming = replyWasIncoming,
+                            attachment = message.replyToAttachment,
+                            containingMessageIsIncoming = incoming,
+                            compact = message.attachments.any(ChatAttachment::isAudio) &&
+                                message.attachments.none { it.isImage || it.isVideo },
+                            theme = theme,
+                            attachmentResolver = attachmentResolver,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 8.dp, end = 8.dp, top = 6.dp)
-                                .background(Color.Black.copy(alpha = 0.07f), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                text = message.replyToSenderName?.takeIf { it.isNotBlank() } ?: "Reply",
-                                color = theme.accentColor,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 11.sp,
-                            )
-                            Text(
-                                text = message.replyToMessageText?.ifBlank { "Attachment" } ?: "Message",
-                                color = textColor,
-                                fontSize = 12.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                                .padding(horizontal = if (hasMediaAttachments) 6.dp else 8.dp)
+                                .padding(top = if (hasMediaAttachments) 5.dp else 8.dp, bottom = 4.dp),
+                        )
                     }
                     if (attachmentContent != null) {
                         Column(
@@ -594,26 +626,6 @@ internal fun MessageBubble(
                             )
                         }
                     }
-                    DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
-                        if (onReply != null) {
-                            DropdownMenuItem(
-                                text = { Text("Reply") },
-                                onClick = { showActions = false; onReply() },
-                            )
-                        }
-                        if (canEdit) {
-                            DropdownMenuItem(
-                                text = { Text("Edit") },
-                                onClick = { showActions = false; showEditDialog = true },
-                            )
-                        }
-                        if (onDeleteMessage != null) {
-                            DropdownMenuItem(
-                                text = { Text("Delete") },
-                                onClick = { showActions = false; onDeleteMessage(message.id) },
-                            )
-                        }
-                    }
                 }
             }
             if (incoming) {
@@ -621,22 +633,30 @@ internal fun MessageBubble(
             }
         }
     }
-    if (showEditDialog) {
-        AlertDialog(
-            onDismissRequest = { showEditDialog = false },
-            title = { Text("Edit message") },
-            text = { OutlinedTextField(editedText, { editedText = it }, maxLines = 5) },
-            confirmButton = {
-                TextButton(
-                    enabled = editedText.trim().isNotEmpty(),
-                    onClick = {
-                        onEditMessage?.invoke(message.id, editedText.trim())
-                        showEditDialog = false
-                    },
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showEditDialog = false }) { Text("Cancel") } },
-        )
+}
+
+@Composable
+private fun MessageSelectionCheckmark(isSelected: Boolean, theme: ChatTheme) {
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .clip(CircleShape)
+            .background(if (isSelected) theme.accentColor else Color.Transparent)
+            .border(
+                width = 2.dp,
+                color = if (isSelected) theme.accentColor else theme.incomingTimestampColor,
+                shape = CircleShape,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (isSelected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = null,
+                tint = theme.accentContentColor,
+                modifier = Modifier.size(16.dp),
+            )
+        }
     }
 }
 
@@ -916,6 +936,192 @@ private fun DeliveryStatus(status: DeliveryStatus, theme: ChatTheme, onRetry: ()
 }
 
 @Composable
+private fun MessageReplyQuote(
+    senderName: String,
+    previewText: String,
+    wasIncoming: Boolean,
+    attachment: ChatAttachment?,
+    containingMessageIsIncoming: Boolean,
+    compact: Boolean,
+    theme: ChatTheme,
+    attachmentResolver: AttachmentResolver,
+    modifier: Modifier = Modifier,
+) {
+    val thumbnailAttachment = attachment?.takeIf { it.isImage || it.isVideo }
+    val showsThumbnail = thumbnailAttachment != null
+    val previewColor = if (containingMessageIsIncoming) {
+        theme.incomingTextColor.copy(alpha = 0.88f)
+    } else {
+        theme.outgoingTextColor.copy(alpha = 0.92f)
+    }
+    val shape = RoundedCornerShape(if (compact) 8.dp else 10.dp)
+    Row(
+        modifier = modifier
+            .height(IntrinsicSize.Min)
+            .background(
+                if (containingMessageIsIncoming) {
+                    Color.Black.copy(alpha = 0.08f)
+                } else {
+                    Color.White.copy(alpha = 0.22f)
+                },
+                shape,
+            )
+            .clip(shape),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(if (compact) 3.5.dp else 5.dp)
+                .fillMaxHeight()
+                .background(theme.replyQuoteSenderColor(wasIncoming)),
+        )
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = if (compact) 7.dp else 10.dp)
+                .padding(end = if (showsThumbnail) 0.dp else if (compact) 7.dp else 10.dp)
+                .padding(vertical = if (compact) 5.dp else 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
+            ) {
+                Text(
+                    text = senderName,
+                    color = theme.replyQuoteSenderColor(wasIncoming),
+                    fontSize = if (compact) 12.sp else 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                ReplyPreviewLine(
+                    text = previewText,
+                    attachment = attachment,
+                    color = previewColor,
+                    fontSize = if (compact) 13.sp else 15.sp,
+                    maxLines = if (compact) 1 else 2,
+                )
+            }
+            if (thumbnailAttachment != null) {
+                ReplyAttachmentThumbnail(
+                    attachment = thumbnailAttachment,
+                    attachmentResolver = attachmentResolver,
+                    size = if (compact) 32.dp else 56.dp,
+                    cornerRadius = if (compact) 4.dp else 6.dp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ReplyPreviewLine(
+    text: String,
+    attachment: ChatAttachment?,
+    color: Color,
+    fontSize: TextUnit,
+    maxLines: Int,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        val icon = when {
+            attachment?.isImage == true -> Icons.Default.CameraAlt
+            attachment?.isVideo == true -> Icons.Default.Videocam
+            attachment?.isAudio == true -> Icons.Default.Mic
+            attachment != null -> Icons.Default.Description
+            else -> null
+        }
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = color.copy(alpha = 0.9f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Text(
+            text = text,
+            color = color,
+            fontSize = fontSize,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+internal fun ReplyAttachmentThumbnail(
+    attachment: ChatAttachment,
+    attachmentResolver: AttachmentResolver,
+    size: Dp,
+    cornerRadius: Dp,
+) {
+    val context = LocalContext.current
+    val uri by produceState<android.net.Uri?>(
+        attachment.posterUri ?: attachment.localUri,
+        attachment.id,
+        attachment.posterUri,
+        attachment.localUri,
+        attachmentResolver,
+    ) {
+        value = withContext(Dispatchers.IO) {
+            attachment.posterUri
+                ?: runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull()
+                ?: attachment.localUri
+                ?: runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
+        }
+    }
+    val bitmap by produceState<android.graphics.Bitmap?>(null, uri, attachment.isVideo) {
+        value = uri?.let { resolved ->
+            withContext(Dispatchers.IO) {
+                decodeAttachmentPreview(
+                    context = context,
+                    uri = resolved,
+                    preferVideo = attachment.isVideo && resolved != attachment.posterUri,
+                    maxSide = 256,
+                )
+            }
+        }
+    }
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(RoundedCornerShape(cornerRadius))
+            .background(Color.Black.copy(alpha = 0.12f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Icon(
+                imageVector = if (attachment.isVideo) Icons.Default.Videocam else Icons.Default.CameraAlt,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        if (attachment.isVideo) {
+            Icon(
+                imageVector = Icons.Default.PlayArrow,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
 internal fun DateSeparator(label: String, theme: ChatTheme) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Text(
@@ -972,7 +1178,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
     )
     val dot1Offset by transition.animateFloat(
         initialValue = 0f,
-        targetValue = -3f,
+        targetValue = -4f,
         animationSpec = infiniteRepeatable(
             animation = tween(500, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -981,7 +1187,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
     )
     val dot2Offset by transition.animateFloat(
         initialValue = 0f,
-        targetValue = -3f,
+        targetValue = -4f,
         animationSpec = infiniteRepeatable(
             animation = tween(500, delayMillis = 160, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -990,7 +1196,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
     )
     val dot3Offset by transition.animateFloat(
         initialValue = 0f,
-        targetValue = -3f,
+        targetValue = -4f,
         animationSpec = infiniteRepeatable(
             animation = tween(500, delayMillis = 320, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -1001,21 +1207,22 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
     Row(
         Modifier
             .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
             .semantics { contentDescription = label },
         horizontalArrangement = Arrangement.Start,
     ) {
         Row(
             modifier = Modifier
                 .background(theme.typingIndicatorBubbleColor, bubbleShape)
-                .border(0.5.dp, theme.incomingBubbleBorderColor, bubbleShape)
-                .padding(horizontal = 10.dp, vertical = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                .border(1.dp, theme.incomingBubbleBorderColor, bubbleShape)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 Modifier
                     .offset(y = dot1Offset.dp)
-                    .size(5.dp)
+                    .size(6.dp)
                     .background(
                         theme.typingIndicatorTextColor.copy(alpha = dot1Alpha),
                         CircleShape,
@@ -1024,7 +1231,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
             Box(
                 Modifier
                     .offset(y = dot2Offset.dp)
-                    .size(5.dp)
+                    .size(6.dp)
                     .background(
                         theme.typingIndicatorTextColor.copy(alpha = dot2Alpha),
                         CircleShape,
@@ -1033,7 +1240,7 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
             Box(
                 Modifier
                     .offset(y = dot3Offset.dp)
-                    .size(5.dp)
+                    .size(6.dp)
                     .background(
                         theme.typingIndicatorTextColor.copy(alpha = dot3Alpha),
                         CircleShape,

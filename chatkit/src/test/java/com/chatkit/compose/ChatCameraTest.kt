@@ -55,6 +55,32 @@ class VideoTrimRangeTest {
     }
 
     @Test
+    fun movingStartKeepsEndFixedAndStopsAtMinimumDuration() {
+        val moved = moveTrimStart(VideoTrimRange(1.0, 8.0), 7.9, 10.0)
+        assertEquals(7.5, moved.startSeconds, 1e-6)
+        assertEquals(8.0, moved.endSeconds, 1e-6)
+    }
+
+    @Test
+    fun movingEndKeepsStartFixedAndStopsAtMinimumDuration() {
+        val moved = moveTrimEnd(VideoTrimRange(2.0, 8.0), 2.1, 10.0)
+        assertEquals(2.0, moved.startSeconds, 1e-6)
+        assertEquals(2.5, moved.endSeconds, 1e-6)
+    }
+
+    @Test
+    fun trimHandlesClampAtVideoBounds() {
+        assertEquals(
+            VideoTrimRange(0.0, 8.0),
+            moveTrimStart(VideoTrimRange(1.0, 8.0), -4.0, 10.0),
+        )
+        assertEquals(
+            VideoTrimRange(2.0, 10.0),
+            moveTrimEnd(VideoTrimRange(2.0, 8.0), 14.0, 10.0),
+        )
+    }
+
+    @Test
     fun fullRangeDetectionUsesEpsilon() {
         val range = VideoTrimRange(0.0, 10.0)
         assertTrue(range.isFullRange(10.0))

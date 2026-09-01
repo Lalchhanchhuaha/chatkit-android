@@ -34,4 +34,10 @@ public data class ChatTheme(
     val typingIndicatorTextColor: Color = Color(0xFF9AA5B1),
     val composerButtonBackgroundColor: Color = Color(0xFFEFF3F6),
     val composerIconColor: Color = Color(0xFF5F7186),
+    /** Sender color when a reply quote references the current user's own message. */
+    val replyQuoteSelfSenderColor: Color = accentColor,
 )
+
+/** Matches iOS ChatTheme.replyQuoteSenderColor(wasIncoming:). */
+internal fun ChatTheme.replyQuoteSenderColor(wasIncoming: Boolean): Color =
+    if (wasIncoming) accentColor else replyQuoteSelfSenderColor

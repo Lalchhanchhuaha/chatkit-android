@@ -57,6 +57,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
@@ -93,6 +94,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -363,11 +365,13 @@ private fun LiveCameraScreen(
     val scope = rememberCoroutineScope()
 
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
+    var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var activeRecording by remember { mutableStateOf<Recording?>(null) }
     var rebinding by remember { mutableStateOf(false) }
+    var captureInFlight by remember { mutableStateOf(false) }
     var torchSupported by remember { mutableStateOf(false) }
     var minZoom by remember { mutableFloatStateOf(1f) }
     var maxZoom by remember { mutableFloatStateOf(1f) }
@@ -472,19 +476,18 @@ private fun LiveCameraScreen(
         val provider = withContext(Dispatchers.IO) {
             ProcessCameraProvider.getInstance(context).get()
         }
-        // Wait until PreviewView has a real size so viewPort matches the on-screen frame.
-        preview.post {
-            bindCamera(provider, preview)
-        }
+        cameraProvider = provider
+        // Wait for AndroidView layout without posting a callback that could outlive this screen.
+        withFrameNanos { }
+        if (isActive) bindCamera(provider, preview)
     }
 
     DisposableEffect(Unit) {
         onDispose {
             activeRecording?.stop()
             activeRecording = null
-            runCatching {
-                ProcessCameraProvider.getInstance(context).get().unbindAll()
-            }
+            runCatching { cameraProvider?.unbindAll() }
+            cameraProvider = null
             cameraExecutor.shutdown()
         }
     }
@@ -565,7 +568,8 @@ private fun LiveCameraScreen(
                         // Container is already 3:4 / 9:16; FILL + shared ViewPort makes
                         // the JPEG/MP4 match the visible viewfinder.
                         scaleType = PreviewView.ScaleType.FILL_CENTER
-                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                        // SurfaceView avoids the extra GPU copy used by TextureView.
+                        implementationMode = PreviewView.ImplementationMode.PERFORMANCE
                         val scaleDetector = ScaleGestureDetector(
                             ctx,
                             object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -675,10 +679,11 @@ private fun LiveCameraScreen(
                 isVideoMode = viewModel.captureMode == CaptureMode.VIDEO,
                 isRecording = viewModel.isRecording,
                 onClick = {
-                    if (rebinding) return@ShutterButton
+                    if (rebinding || captureInFlight) return@ShutterButton
                     when (viewModel.captureMode) {
                         CaptureMode.PHOTO -> {
                             val capture = imageCapture ?: return@ShutterButton
+                            captureInFlight = true
                             val (id, file) = ChatCameraFiles.photoFile(context.cacheDir)
                             val options = ImageCapture.OutputFileOptions.Builder(file).build()
                             if (viewModel.flashEnabled && torchSupported) {
@@ -695,15 +700,15 @@ private fun LiveCameraScreen(
                                     ) {
                                         scope.launch(Dispatchers.Main) {
                                             viewModel.onPhotoCaptured(id, file)
-                                            runCatching {
-                                                ProcessCameraProvider.getInstance(context).get()
-                                                    .unbindAll()
-                                            }
+                                            runCatching { cameraProvider?.unbindAll() }
                                         }
                                     }
 
                                     override fun onError(exception: ImageCaptureException) {
                                         ChatCameraFiles.deleteQuietly(file)
+                                        scope.launch(Dispatchers.Main) {
+                                            captureInFlight = false
+                                        }
                                     }
                                 },
                             )
@@ -748,11 +753,9 @@ private fun LiveCameraScreen(
                                         if (event.hasError()) {
                                             ChatCameraFiles.deleteQuietly(file)
                                         } else if (pending.compareAndSet(true, false)) {
+                                            captureInFlight = true
                                             viewModel.onVideoCaptured(id, file)
-                                            runCatching {
-                                                ProcessCameraProvider.getInstance(context).get()
-                                                    .unbindAll()
-                                            }
+                                            runCatching { cameraProvider?.unbindAll() }
                                         }
                                     }
                                     else -> Unit
@@ -1117,7 +1120,7 @@ private fun VideoReviewPlayer(
     }
 }
 
-private enum class TrimDragMode { Start, End, Window }
+private enum class TrimDragMode { Start, End, Scrub }
 
 @Composable
 private fun VideoTrimBar(
@@ -1279,23 +1282,36 @@ private fun VideoTrimBar(
         Box(
             Modifier
                 .zIndex(10f)
-                .fillMaxSize()
+                // Handles extend beyond the filmstrip at 0% and 100%. Extend the gesture
+                // surface too, otherwise touching the visible bracket misses the detector.
+                .offset(x = -handleVisualWidth)
+                .requiredWidth(maxWidth + handleVisualWidth * 2)
+                .fillMaxHeight()
                 .pointerInput(safeTotal, handleVisualWidthPx, hitSlopPx) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        val w = size.width.toFloat().coerceAtLeast(1f)
+                        val gestureWidth = size.width.toFloat().coerceAtLeast(1f)
                         val handlePx = handleVisualWidthPx
+                        val w = (gestureWidth - handlePx * 2f).coerceAtLeast(1f)
+                        fun positionInBar(positionX: Float): Float = positionX - handlePx
                         fun xToSeconds(x: Float): Double =
                             ((x / w).coerceIn(0f, 1f) * safeTotal)
 
                         val rangeAtDown = latestRange
                         val startX = (rangeAtDown.startSeconds / safeTotal).toFloat() * w
                         val endX = (rangeAtDown.endSeconds / safeTotal).toFloat() * w
-                        val x = down.position.x
+                        val x = positionInBar(down.position.x)
+                        val hitsStart = x in (startX - handlePx)..(startX + hitSlopPx)
+                        val hitsEnd = x in (endX - hitSlopPx)..(endX + handlePx)
                         val mode = when {
-                            x in (startX - handlePx)..(startX + hitSlopPx) -> TrimDragMode.Start
-                            x in (endX - hitSlopPx)..(endX + handlePx) -> TrimDragMode.End
-                            x in startX..endX -> TrimDragMode.Window
+                            hitsStart && hitsEnd -> if (abs(x - startX) <= abs(x - endX)) {
+                                TrimDragMode.Start
+                            } else {
+                                TrimDragMode.End
+                            }
+                            hitsStart -> TrimDragMode.Start
+                            hitsEnd -> TrimDragMode.End
+                            x in startX..endX -> TrimDragMode.Scrub
                             else -> null
                         } ?: return@awaitEachGesture
 
@@ -1304,21 +1320,19 @@ private fun VideoTrimBar(
 
                         var localStart = rangeAtDown.startSeconds
                         var localEnd = rangeAtDown.endSeconds
-                        val windowStartAtDown = localStart
-                        val windowEndAtDown = localEnd
-                        val downX = x
+                        var scrubSeconds = xToSeconds(x).coerceIn(localStart, localEnd)
                         // Keep the inner handle edge under the finger while dragging.
                         val trimAnchorOffsetX = when (mode) {
                             TrimDragMode.Start -> x - startX
                             TrimDragMode.End -> x - endX
-                            TrimDragMode.Window -> 0f
+                            TrimDragMode.Scrub -> 0f
                         }
 
                         latestOnScrub(
                             when (mode) {
                                 TrimDragMode.Start -> localStart
                                 TrimDragMode.End -> localEnd
-                                TrimDragMode.Window -> xToSeconds(x).coerceIn(localStart, localEnd)
+                                TrimDragMode.Scrub -> scrubSeconds
                             },
                             true,
                         )
@@ -1326,32 +1340,33 @@ private fun VideoTrimBar(
                         try {
                             drag(down.id) { change ->
                                 change.consume()
-                                val currentX = change.position.x
+                                val currentX = positionInBar(change.position.x)
                                 when (mode) {
                                     TrimDragMode.Start -> {
-                                        localStart = xToSeconds(currentX - trimAnchorOffsetX)
+                                        val updated = moveTrimStart(
+                                            VideoTrimRange(localStart, localEnd),
+                                            xToSeconds(currentX - trimAnchorOffsetX),
+                                            safeTotal,
+                                        )
+                                        localStart = updated.startSeconds
+                                        localEnd = updated.endSeconds
                                         latestOnTrimChanged(localStart, localEnd)
                                         latestOnScrub(localStart, true)
                                     }
                                     TrimDragMode.End -> {
-                                        localEnd = xToSeconds(currentX - trimAnchorOffsetX)
+                                        val updated = moveTrimEnd(
+                                            VideoTrimRange(localStart, localEnd),
+                                            xToSeconds(currentX - trimAnchorOffsetX),
+                                            safeTotal,
+                                        )
+                                        localStart = updated.startSeconds
+                                        localEnd = updated.endSeconds
                                         latestOnTrimChanged(localStart, localEnd)
                                         latestOnScrub(localEnd, true)
                                     }
-                                    TrimDragMode.Window -> {
-                                        val delta = ((currentX - downX) / w) * safeTotal
-                                        val moved = moveTrimWindow(
-                                            VideoTrimRange(windowStartAtDown, windowEndAtDown),
-                                            delta,
-                                            safeTotal,
-                                        )
-                                        localStart = moved.startSeconds
-                                        localEnd = moved.endSeconds
-                                        latestOnTrimChanged(localStart, localEnd)
-                                        latestOnScrub(
-                                            xToSeconds(currentX).coerceIn(localStart, localEnd),
-                                            true,
-                                        )
+                                    TrimDragMode.Scrub -> {
+                                        scrubSeconds = xToSeconds(currentX).coerceIn(localStart, localEnd)
+                                        latestOnScrub(scrubSeconds, true)
                                     }
                                 }
                             }
@@ -1362,7 +1377,7 @@ private fun VideoTrimBar(
                             when (mode) {
                                 TrimDragMode.Start -> localStart
                                 TrimDragMode.End -> localEnd
-                                TrimDragMode.Window -> localStart
+                                TrimDragMode.Scrub -> scrubSeconds
                             },
                             false,
                         )

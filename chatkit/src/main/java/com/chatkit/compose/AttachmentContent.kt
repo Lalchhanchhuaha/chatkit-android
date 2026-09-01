@@ -1,6 +1,7 @@
 package com.chatkit.compose
 
 import android.net.Uri
+import android.util.LruCache
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -101,6 +102,48 @@ private val SingleMediaHeight = 210.dp
 private val MediaGridSpacing = 4.dp
 private const val WaveformBarCount = 28
 private val WaveformBarSpacing = 2.dp
+private const val AttachmentPreviewCacheKilobytes = 24 * 1024
+private val AttachmentPreviewCache = object : LruCache<String, ImageBitmap>(
+    AttachmentPreviewCacheKilobytes,
+) {
+    override fun sizeOf(key: String, value: ImageBitmap): Int =
+        (value.width.toLong() * value.height.toLong() * 4L / 1024L)
+            .coerceAtLeast(1L)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
+}
+
+private fun attachmentPreviewCacheKey(uri: Uri, preferVideo: Boolean, maxSide: Int): String =
+    "$uri|$preferVideo|$maxSide"
+
+private fun cachedAttachmentPreviewOrNull(
+    uri: Uri,
+    preferVideo: Boolean,
+    maxSide: Int,
+): ImageBitmap? = synchronized(AttachmentPreviewCache) {
+    AttachmentPreviewCache.get(attachmentPreviewCacheKey(uri, preferVideo, maxSide))
+}
+
+/** Must be called off the main thread: a cache miss performs bitmap/video decoding. */
+private fun decodeAndCacheAttachmentPreview(
+    context: android.content.Context,
+    uri: Uri,
+    preferVideo: Boolean,
+    maxSide: Int,
+): ImageBitmap? {
+    val key = attachmentPreviewCacheKey(uri, preferVideo, maxSide)
+    cachedAttachmentPreviewOrNull(uri, preferVideo, maxSide)?.let { return it }
+    val decoded = decodeAttachmentPreview(
+        context = context,
+        uri = uri,
+        preferVideo = preferVideo,
+        maxSide = maxSide,
+    )?.asImageBitmap() ?: return null
+    synchronized(AttachmentPreviewCache) {
+        AttachmentPreviewCache.put(key, decoded)
+    }
+    return decoded
+}
 
 /**
  * Default host attachment renderer (single attachment). Prefer
@@ -515,16 +558,28 @@ private fun MediaAlbumGalleryRow(
             ?: runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull()
     }
     val displayUri = resolvedUri ?: posterUri
-    val bitmap by produceState<ImageBitmap?>(null, displayUri, resolvedUri, isVideo) {
+    val initialBitmap = remember(displayUri, resolvedUri, posterUri, isVideo) {
+        val initialUri = posterUri ?: displayUri
+        initialUri?.let { uri ->
+            cachedAttachmentPreviewOrNull(
+                uri = uri,
+                preferVideo = isVideo && posterUri == null && resolvedUri != null,
+                // Decode only what the gallery tile can display on the first frame.
+                // The sharper 1600px preview is produced below on Dispatchers.IO.
+                maxSide = if (posterUri != null) 384 else 640,
+            )
+        }
+    }
+    val bitmap by produceState<ImageBitmap?>(initialBitmap, displayUri, resolvedUri, isVideo) {
         value = displayUri?.let { uri ->
             withContext(Dispatchers.IO) {
                 runCatching {
-                    decodeAttachmentPreview(
-                        context,
-                        uri,
+                    decodeAndCacheAttachmentPreview(
+                        context = context,
+                        uri = uri,
                         preferVideo = isVideo && resolvedUri != null,
                         maxSide = 1600,
-                    )?.asImageBitmap()
+                    )
                 }.getOrNull()
             }
         }
@@ -616,6 +671,9 @@ private fun MediaAttachmentTile(
     var downloadCancelled by remember(attachment.id, attachment.transferState) {
         mutableStateOf(attachment.transferState is TransferState.DownloadFailed)
     }
+    var hasLocalResolvableContent by remember(attachment.id) {
+        mutableStateOf(attachment.localUri != null || attachment.posterUri != null)
+    }
     var resolveExhausted by remember(attachment.id, retryToken) { mutableStateOf(false) }
     val resolvedUri by produceState<Uri?>(
         attachment.localUri,
@@ -645,6 +703,7 @@ private fun MediaAttachmentTile(
         while (result == null && attempt < 12) {
             if (resolveCancelled || downloadCancelled) break
             val available = runCatching { attachmentResolver.isAvailableLocally(attachment) }.getOrDefault(false)
+            if (available) hasLocalResolvableContent = true
             if (automaticallyLoadsImages || available || !attachment.isImage) {
                 result = runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
             }
@@ -664,8 +723,21 @@ private fun MediaAttachmentTile(
     // Prefer full media when present; fall back to poster so the bubble is never blank
     // while the host is still downloading/decrypting the full file.
     val displayUri = resolvedUri ?: posterUri
+    val hasLocalDisplaySource = hasLocalResolvableContent || displayUri != null
+    val initialBitmap = remember(displayUri, resolvedUri, posterUri, isVideo) {
+        val initialUri = posterUri ?: displayUri
+        initialUri?.let { uri ->
+            cachedAttachmentPreviewOrNull(
+                uri = uri,
+                preferVideo = isVideo && posterUri == null && resolvedUri != null,
+                // Avoid decoding a full 1024px bitmap on the composition thread.
+                // A small local preview removes the placeholder; IO replaces it below.
+                maxSide = if (posterUri != null) 320 else 512,
+            )
+        }
+    }
     val bitmap by produceState<ImageBitmap?>(
-        null,
+        initialBitmap,
         displayUri,
         resolvedUri,
         posterUri,
@@ -714,7 +786,13 @@ private fun MediaAttachmentTile(
                             )
                         }
                     }
-                    decoded?.asImageBitmap()
+                    decoded?.asImageBitmap()?.also { preview ->
+                        val uri = displayUri ?: return@also
+                        val key = "${uri}|${isVideo && resolvedUri != null}|1024"
+                        synchronized(AttachmentPreviewCache) {
+                            AttachmentPreviewCache.put(key, preview)
+                        }
+                    }
                 }.getOrNull()
             }
         } else {
@@ -734,6 +812,7 @@ private fun MediaAttachmentTile(
         (downloadCancelled && bitmap == null) ||
         (resolveExhausted && bitmap == null && posterUri == null)
     val waitingForMedia = !isTransferring &&
+        !hasLocalDisplaySource &&
         !baseFailed &&
         bitmap == null &&
         !(resolveExhausted && posterUri == null)
@@ -745,7 +824,8 @@ private fun MediaAttachmentTile(
         // indefinite spinner even if the host still reports Downloading — but only when
         // there is also no poster to show (WhatsApp keeps the thumb visible).
         resolveExhausted && bitmap == null && posterUri == null -> TransferState.DownloadFailed
-        transfer is TransferState.Uploading || transfer is TransferState.Downloading -> transfer
+        transfer is TransferState.Uploading -> transfer
+        transfer is TransferState.Downloading && !hasLocalDisplaySource -> transfer
         waitingForMedia -> TransferState.Downloading(0f)
         else -> transfer
     }

@@ -56,6 +56,7 @@ public sealed interface ChatAction {
     public data class DeleteMessage(public val messageId: String) : ChatAction
     public data class CancelAttachmentUpload(public val attachment: ChatAttachment) : ChatAction
     public data class CancelAttachmentDownload(public val attachment: ChatAttachment) : ChatAction
+    public data class RetryAttachmentDownload(public val attachment: ChatAttachment) : ChatAction
     public data class VoiceRecorded(public val uri: Uri, public val durationMillis: Long) : ChatAction
     public data object LoadPreviousMessages : ChatAction
     public data object RetryLoading : ChatAction
@@ -106,6 +107,9 @@ public fun ChatScreen(
                 },
                 onCancelAttachmentDownload = {
                     onAction(ChatAction.CancelAttachmentDownload(it))
+                },
+                onRetryAttachmentDownload = {
+                    onAction(ChatAction.RetryAttachmentDownload(it))
                 },
                 onRetryMessage = { onAction(ChatAction.RetryMessage(it)) },
                 onEditMessage = { id, text -> onAction(ChatAction.EditMessage(id, text)) },

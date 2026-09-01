@@ -116,8 +116,6 @@ private fun uprightFrameFromRetriever(
     maxSide: Int,
     timeUs: Long,
 ): Bitmap? {
-    val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-        ?: return null
     val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
         ?.toIntOrNull()
         ?: 0
@@ -125,8 +123,40 @@ private fun uprightFrameFromRetriever(
         ?.toIntOrNull()
     val codedHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
         ?.toIntOrNull()
+    val frame = videoFrameAtTime(
+        retriever = retriever,
+        timeUs = timeUs,
+        maxSide = maxSide,
+        codedWidth = codedWidth,
+        codedHeight = codedHeight,
+    ) ?: return null
     val upright = uprightRetrievedVideoFrame(frame, rotation, codedWidth, codedHeight)
     return if (maxSide > 0) scaleDownBitmap(upright, maxSide) else upright
+}
+
+/** Uses platform-side scaled extraction on API 27+ to avoid allocating a full video frame. */
+internal fun videoFrameAtTime(
+    retriever: MediaMetadataRetriever,
+    timeUs: Long,
+    maxSide: Int,
+    codedWidth: Int?,
+    codedHeight: Int?,
+): Bitmap? {
+    val width = codedWidth ?: 0
+    val height = codedHeight ?: 0
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1 &&
+        maxSide > 0 && width > 0 && height > 0
+    ) {
+        val longest = max(width, height).coerceAtLeast(1)
+        val scale = (maxSide.toFloat() / longest).coerceAtMost(1f)
+        return retriever.getScaledFrameAtTime(
+            timeUs,
+            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            (width * scale).toInt().coerceAtLeast(1),
+            (height * scale).toInt().coerceAtLeast(1),
+        )
+    }
+    return retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
 }
 
 /**

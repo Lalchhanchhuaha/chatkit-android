@@ -59,6 +59,38 @@ internal fun clampTrimRange(
     return VideoTrimRange(start, end)
 }
 
+/** Moves only the in-point, keeping the out-point fixed like a conventional trimmer. */
+internal fun moveTrimStart(
+    range: VideoTrimRange,
+    proposedStartSeconds: Double,
+    totalSeconds: Double,
+): VideoTrimRange {
+    val total = totalSeconds.coerceAtLeast(0.0)
+    if (total <= 0.0) return VideoTrimRange(0.0, 0.0)
+    val end = range.endSeconds.coerceIn(0.0, total)
+    val minDuration = minimumTrimDurationSeconds(total).coerceAtMost(end)
+    return VideoTrimRange(
+        startSeconds = proposedStartSeconds.coerceIn(0.0, (end - minDuration).coerceAtLeast(0.0)),
+        endSeconds = end,
+    )
+}
+
+/** Moves only the out-point, keeping the in-point fixed like a conventional trimmer. */
+internal fun moveTrimEnd(
+    range: VideoTrimRange,
+    proposedEndSeconds: Double,
+    totalSeconds: Double,
+): VideoTrimRange {
+    val total = totalSeconds.coerceAtLeast(0.0)
+    if (total <= 0.0) return VideoTrimRange(0.0, 0.0)
+    val start = range.startSeconds.coerceIn(0.0, total)
+    val minDuration = minimumTrimDurationSeconds(total).coerceAtMost(total - start)
+    return VideoTrimRange(
+        startSeconds = start,
+        endSeconds = proposedEndSeconds.coerceIn((start + minDuration).coerceAtMost(total), total),
+    )
+}
+
 internal fun moveTrimWindow(
     range: VideoTrimRange,
     deltaSeconds: Double,

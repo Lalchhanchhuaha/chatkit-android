@@ -12,6 +12,8 @@ import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -60,6 +62,7 @@ internal class ChatCameraViewModel(
         private set
 
     private var abandonedFiles = mutableListOf<File>()
+    private var videoProcessingJob: Job? = null
 
     init {
         if (!allowsVideo && captureMode == CaptureMode.VIDEO) {
@@ -157,19 +160,28 @@ internal class ChatCameraViewModel(
 
     fun onVideoCaptured(id: String, file: File) {
         isRecording = false
-        val duration = ChatCameraFiles.durationSeconds(file) ?: 0.0
-        enterReview(
-            CapturedMedia(
-                id = id,
-                mediaType = MediaType.Video,
-                localFile = file,
-                durationSeconds = duration,
-                caption = "",
-            ),
-        )
-        trimRange = VideoTrimRange(0.0, duration)
-        savedStateHandle["trimStart"] = 0.0
-        savedStateHandle["trimEnd"] = duration
+        videoProcessingJob?.cancel()
+        abandonedFiles += file
+        videoProcessingJob = viewModelScope.launch {
+            val duration = withContext(Dispatchers.IO) {
+                ChatCameraFiles.durationSeconds(file) ?: 0.0
+            }
+            ensureActive()
+            if (!file.exists()) return@launch
+            abandonedFiles.remove(file)
+            enterReview(
+                CapturedMedia(
+                    id = id,
+                    mediaType = MediaType.Video,
+                    localFile = file,
+                    durationSeconds = duration,
+                    caption = "",
+                ),
+            )
+            trimRange = VideoTrimRange(0.0, duration)
+            savedStateHandle["trimStart"] = 0.0
+            savedStateHandle["trimEnd"] = duration
+        }
     }
 
     private fun enterReview(capture: CapturedMedia) {
@@ -198,6 +210,8 @@ internal class ChatCameraViewModel(
     }
 
     fun cancelAndCleanup() {
+        videoProcessingJob?.cancel()
+        videoProcessingJob = null
         when (val state = cameraState) {
             is ChatCameraState.Reviewing -> ChatCameraFiles.deleteQuietly(state.capture.localFile)
             else -> Unit

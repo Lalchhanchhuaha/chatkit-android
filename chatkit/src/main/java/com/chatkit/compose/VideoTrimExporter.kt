@@ -114,9 +114,12 @@ internal object VideoTrimExporter {
                 } else {
                     (durationMs * i / (frameCount - 1).toDouble()).roundToInt().toLong()
                 }
-                val frame = retriever.getFrameAtTime(
-                    timeMs * 1000L,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                val frame = videoFrameAtTime(
+                    retriever = retriever,
+                    timeUs = timeMs * 1000L,
+                    maxSide = maxSide,
+                    codedWidth = codedWidth,
+                    codedHeight = codedHeight,
                 ) ?: continue
                 val upright = uprightRetrievedVideoFrame(frame, rotation, codedWidth, codedHeight)
                 frames += scaleDown(upright, maxSide)

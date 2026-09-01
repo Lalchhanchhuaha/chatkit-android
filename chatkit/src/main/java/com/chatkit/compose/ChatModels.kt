@@ -20,12 +20,27 @@ public data class ChatMessage(
     public val replyToMessageId: String? = null,
     public val replyToMessageText: String? = null,
     public val replyToSenderName: String? = null,
+    /** Direction snapshot used to color/name a reply quote after the source row changes. */
+    public val replyToWasIncoming: Boolean? = null,
+    /** Optional attachment snapshot used for the reply quote icon and thumbnail. */
+    public val replyToAttachment: ChatAttachment? = null,
 ) {
     /** True when this row should use the incoming bubble treatment. */
     public val isIncoming: Boolean get() = direction == MessageDirection.Incoming
 
     /** Epoch representation retained as a convenience for date and time formatters. */
     public val timestampMillis: Long get() = timestamp.toEpochMilli()
+}
+
+internal fun ChatMessage.replyPreviewAttachment(): ChatAttachment? =
+    attachments.firstOrNull(ChatAttachment::isImage)
+        ?: attachments.firstOrNull(ChatAttachment::isVideo)
+        ?: attachments.firstOrNull()
+
+internal fun ChatMessage.replyPreviewText(): String {
+    val body = text.trim()
+    if (body.isNotEmpty()) return body
+    return replyPreviewAttachment()?.fileName?.takeIf(String::isNotBlank) ?: "Attachment"
 }
 
 /** Direction of a message relative to the current user. */

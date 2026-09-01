@@ -58,6 +58,23 @@ class ChatModelsTest {
     }
 
     @Test
+    fun replyPreviewMatchesIosTextAndAttachmentPriority() {
+        val document = ChatAttachment("doc", "notes.pdf", "application/pdf")
+        val video = ChatAttachment("video", "clip.mp4", "video/mp4")
+        val image = ChatAttachment("image", "photo.jpg", "image/jpeg")
+        val message = ChatMessage(
+            id = "source",
+            text = "",
+            timestamp = Instant.EPOCH,
+            direction = MessageDirection.Incoming,
+            attachments = listOf(document, video, image),
+        )
+        assertEquals(image, message.replyPreviewAttachment())
+        assertEquals("photo.jpg", message.replyPreviewText())
+        assertEquals("Hello", message.copy(text = "  Hello  ").replyPreviewText())
+    }
+
+    @Test
     fun editEligibilityHonorsDirectionTextAndWindow() {
         val now = Instant.parse("2026-01-01T00:10:00Z")
         val recent = ChatMessage("1", "hello", now.minusSeconds(60), MessageDirection.Outgoing)

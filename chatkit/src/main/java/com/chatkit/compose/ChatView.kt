@@ -13,6 +13,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -43,6 +46,8 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -154,7 +159,10 @@ public fun ChatView(
     var isAttachmentPickerPresented by remember { mutableStateOf(false) }
     var isCameraPresented by remember { mutableStateOf(false) }
     var cameraSessionKey by remember { mutableIntStateOf(0) }
-    var isEditingMessage by remember { mutableStateOf(false) }
+    var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val isMessageSelectionMode = selectedMessageIds.isNotEmpty()
+    val isEditingMessage = editingMessage != null
     val pendingMedia = remember { mutableStateListOf<ChatMediaAttachment>() }
     val pendingDocuments = remember { mutableStateListOf<Uri>() }
     val optimisticMessages = remember { mutableStateListOf<ChatMessage>() }
@@ -177,10 +185,18 @@ public fun ChatView(
     val displayedMessages = remember(hostMessages, pendingOptimistic) {
         reconcileMessages(hostMessages, pendingOptimistic)
     }
+    val hostMessageIds = remember(hostMessages) {
+        hostMessages.asSequence().map(ChatMessage::id).toHashSet()
+    }
 
-    LaunchedEffect(hostMessages.map { it.id }) {
-        val claimed = hostMessages.map { it.id }.toSet()
-        optimisticMessages.removeAll { it.id in claimed }
+    LaunchedEffect(hostMessageIds) {
+        optimisticMessages.removeAll { it.id in hostMessageIds }
+        val availableIds = displayedMessages.asSequence().map(ChatMessage::id).toSet()
+        selectedMessageIds = selectedMessageIds.intersect(availableIds)
+        if (editingMessage != null && editingMessage?.id !in availableIds) {
+            editingMessage = null
+            draft = ""
+        }
         if (replyingTo != null && displayedMessages.none { it.id == replyingTo?.id }) {
             replyingTo = null
         }
@@ -259,6 +275,50 @@ public fun ChatView(
         dismissAttachmentPicker()
     }
 
+    fun canSelectMessage(message: ChatMessage): Boolean {
+        if (message.text.contains("was deleted", ignoreCase = true)) return false
+        return onDeleteMessage != null ||
+            (onEditMessage != null && message.canEdit(Instant.now(), modificationWindowMillis) &&
+                message.attachments.isEmpty())
+    }
+
+    fun beginMessageSelection(message: ChatMessage) {
+        if (!canSelectMessage(message)) return
+        dismissInputPanels()
+        replyingTo = null
+        editingMessage = null
+        selectedMessageIds = selectedMessageIds + message.id
+    }
+
+    fun toggleMessageSelection(message: ChatMessage) {
+        if (!isMessageSelectionMode || !canSelectMessage(message)) return
+        selectedMessageIds = if (message.id in selectedMessageIds) {
+            selectedMessageIds - message.id
+        } else {
+            selectedMessageIds + message.id
+        }
+    }
+
+    fun beginEditingSelected() {
+        val selected = displayedMessages.singleOrNull { it.id in selectedMessageIds } ?: return
+        if (onEditMessage == null || selected.attachments.isNotEmpty() ||
+            !selected.canEdit(Instant.now(), modificationWindowMillis)
+        ) return
+        selectedMessageIds = emptySet()
+        replyingTo = null
+        editingMessage = selected
+        draft = selected.text.trim()
+        composerFocusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    fun deleteSelectedMessages() {
+        if (onDeleteMessage == null) return
+        val ids = selectedMessageIds
+        selectedMessageIds = emptySet()
+        ids.forEach(onDeleteMessage)
+    }
+
     fun openCameraCapture() {
         dismissInputPanels()
         cameraSessionKey += 1
@@ -275,8 +335,10 @@ public fun ChatView(
             direction = MessageDirection.Outgoing,
             deliveryStatus = DeliveryStatus.None,
             replyToMessageId = replyingTo?.id,
-            replyToMessageText = replyingTo?.text,
-            replyToSenderName = replyingTo?.senderName,
+            replyToMessageText = replyingTo?.replyPreviewText(),
+            replyToSenderName = replyingTo?.let { if (it.isIncoming) it.senderName else "You" },
+            replyToWasIncoming = replyingTo?.isIncoming,
+            replyToAttachment = replyingTo?.replyPreviewAttachment(),
             attachments = listOf(ChatCameraFiles.makeOptimisticAttachment(media)),
         )
         optimisticMessages += optimistic
@@ -332,8 +394,10 @@ public fun ChatView(
             direction = MessageDirection.Outgoing,
             deliveryStatus = DeliveryStatus.None,
             replyToMessageId = replyingTo?.id,
-            replyToMessageText = replyingTo?.text,
-            replyToSenderName = replyingTo?.senderName,
+            replyToMessageText = replyingTo?.replyPreviewText(),
+            replyToSenderName = replyingTo?.let { if (it.isIncoming) it.senderName else "You" },
+            replyToWasIncoming = replyingTo?.isIncoming,
+            replyToAttachment = replyingTo?.replyPreviewAttachment(),
             attachments = listOf(
                 ChatAttachment(
                     id = id,
@@ -376,6 +440,12 @@ public fun ChatView(
 
     fun submit() {
         val text = draft.trim()
+        editingMessage?.let { editing ->
+            if (text.isNotEmpty()) onEditMessage?.invoke(editing.id, text)
+            editingMessage = null
+            draft = ""
+            return
+        }
         if (text.isEmpty() && pendingMedia.isEmpty() && pendingDocuments.isEmpty()) return
 
         if (pendingMedia.isNotEmpty() || pendingDocuments.isNotEmpty()) {
@@ -386,8 +456,10 @@ public fun ChatView(
                 direction = MessageDirection.Outgoing,
                 deliveryStatus = DeliveryStatus.None,
                 replyToMessageId = replyingTo?.id,
-                replyToMessageText = replyingTo?.text,
-                replyToSenderName = replyingTo?.senderName,
+                replyToMessageText = replyingTo?.replyPreviewText(),
+                replyToSenderName = replyingTo?.let { if (it.isIncoming) it.senderName else "You" },
+                replyToWasIncoming = replyingTo?.isIncoming,
+                replyToAttachment = replyingTo?.replyPreviewAttachment(),
                 attachments = pendingMedia.map { media ->
                     val isVideo = media.mediaType == MediaType.Video
                     ChatAttachment(
@@ -456,15 +528,10 @@ public fun ChatView(
                 listState = listState,
                 showsSender = showsSender,
                 theme = theme,
-                isTyping = isTyping,
-                typingIndicatorText = typingIndicatorText,
                 isViewingNewest = isViewingNewest,
                 unreadIncomingCount = unreadIncomingCount,
                 onTranscriptTap = ::dismissInputPanels,
                 onMessageRetry = onMessageRetry,
-                modificationWindowMillis = modificationWindowMillis,
-                onEditMessage = onEditMessage,
-                onDeleteMessage = onDeleteMessage,
                 onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
                     { message ->
                         replyingTo = message
@@ -473,6 +540,14 @@ public fun ChatView(
                 } else {
                     null
                 },
+                isMessageSelectionMode = isMessageSelectionMode,
+                selectedMessageIds = selectedMessageIds,
+                onMessageLongPress = if (onEditMessage != null || onDeleteMessage != null) {
+                    ::beginMessageSelection
+                } else {
+                    null
+                },
+                onMessageSelectionTap = ::toggleMessageSelection,
                 onLoadPreviousMessages = onLoadPreviousMessages,
                 loadPreviousThreshold = loadPreviousThreshold,
                 onUnreadIncomingCountChanged = { unreadIncomingCount = it },
@@ -487,7 +562,6 @@ public fun ChatView(
                 onRetryAttachmentDownload = onRetryAttachmentDownload,
                 audioPlayer = audioPlayer,
                 deliveryStatusContent = deliveryStatusContent,
-                onMessageEditingChanged = { isEditingMessage = it },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
 
@@ -499,6 +573,20 @@ public fun ChatView(
                 .imePadding()
                 .navigationBarsPadding(),
         ) {
+        AnimatedVisibility(
+            visible = showsComposer && !isEditingMessage && !isMessageSelectionMode &&
+                isTyping && isViewingNewest,
+            enter = slideInVertically(
+                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                initialOffsetY = { it },
+            ) + fadeIn(tween(220)),
+            exit = slideOutVertically(
+                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                targetOffsetY = { it },
+            ) + fadeOut(tween(180)),
+        ) {
+            TypingIndicatorBubble(typingIndicatorText, theme)
+        }
         if (showsComposer) Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -509,10 +597,37 @@ public fun ChatView(
                 ),
         ) {
             HorizontalDivider(color = Color.Black.copy(alpha = 0.08f))
+            if (isMessageSelectionMode) {
+                val selectedMessages = displayedMessages.filter { it.id in selectedMessageIds }
+                MessageSelectionToolbar(
+                    count = selectedMessageIds.size,
+                    canEdit = selectedMessages.size == 1 &&
+                        selectedMessages.firstOrNull()?.let {
+                            onEditMessage != null && it.attachments.isEmpty() &&
+                                it.canEdit(Instant.now(), modificationWindowMillis)
+                        } == true,
+                    canDelete = onDeleteMessage != null,
+                    theme = theme,
+                    onCancel = { selectedMessageIds = emptySet() },
+                    onEdit = ::beginEditingSelected,
+                    onDelete = ::deleteSelectedMessages,
+                )
+            } else {
+            editingMessage?.let { message ->
+                EditingComposerPreview(
+                    message = message,
+                    theme = theme,
+                    onCancel = {
+                        editingMessage = null
+                        draft = ""
+                    },
+                )
+            }
             replyingTo?.let { message ->
                 ReplyComposerPreview(
                     message = message,
                     theme = theme,
+                    attachmentResolver = attachmentResolver,
                     onCancel = { replyingTo = null },
                 )
             }
@@ -575,7 +690,7 @@ public fun ChatView(
                                         } else {
                                             "Add attachment"
                                         },
-                                        enabled = true,
+                                        enabled = !isEditingMessage,
                                         theme = theme,
                                     ) {
                                         if (isAttachmentPickerPresented) {
@@ -696,6 +811,7 @@ public fun ChatView(
                     }
                 }
             }
+            }
         }
 
         AnimatedVisibility(
@@ -747,7 +863,7 @@ public fun ChatView(
 }
 
 @Composable
-private fun ReplyComposerPreview(
+private fun EditingComposerPreview(
     message: ChatMessage,
     theme: ChatTheme,
     onCancel: () -> Unit,
@@ -755,40 +871,182 @@ private fun ReplyComposerPreview(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(theme.composerFieldBackground)
-            .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
+            .background(theme.composerBarColor)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(
             Modifier
-                .size(width = 3.dp, height = 38.dp)
+                .width(5.dp)
+                .height(44.dp)
                 .background(theme.accentColor, RoundedCornerShape(2.dp)),
         )
-        Column(Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             Text(
-                text = message.senderName?.takeIf { it.isNotBlank() }
-                    ?: if (message.isIncoming) "Replying" else "You",
+                text = "Editing message",
                 color = theme.accentColor,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 12.sp,
             )
             Text(
-                text = message.text.ifBlank { "Attachment" },
-                color = theme.incomingTimestampColor,
-                fontSize = 13.sp,
-                maxLines = 1,
+                text = message.text,
+                color = theme.incomingTextColor.copy(alpha = 0.9f),
+                fontSize = 15.sp,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text(
-            text = "✕",
+        Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = null,
+            tint = theme.incomingTimestampColor,
             modifier = Modifier
+                .size(30.dp)
                 .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.06f))
                 .clickable(onClick = onCancel)
-                .padding(8.dp)
+                .semantics { contentDescription = "Cancel edit" },
+        )
+    }
+}
+
+@Composable
+private fun MessageSelectionToolbar(
+    count: Int,
+    canEdit: Boolean,
+    canDelete: Boolean,
+    theme: ChatTheme,
+    onCancel: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.composerBarColor)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = "Cancel",
+            color = theme.accentColor,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .clickable(onClick = onCancel)
+                .padding(vertical = 8.dp)
+                .semantics { contentDescription = "Cancel selection" },
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = if (count == 1) "1 selected" else "$count selected",
+            color = theme.incomingTextColor,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.weight(1f))
+        if (canEdit) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(theme.accentColor)
+                    .clickable(onClick = onEdit)
+                    .semantics { contentDescription = "Edit message" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = null,
+                    tint = theme.accentContentColor,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        if (canDelete) {
+            Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = null,
+                tint = Color.Red,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clickable(enabled = count > 0, onClick = onDelete)
+                    .padding(8.dp)
+                    .semantics { contentDescription = "Delete selected messages" },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReplyComposerPreview(
+    message: ChatMessage,
+    theme: ChatTheme,
+    attachmentResolver: AttachmentResolver,
+    onCancel: () -> Unit,
+) {
+    val previewAttachment = message.replyPreviewAttachment()
+    val title = if (message.isIncoming) {
+        "Replying to ${message.senderName?.takeIf(String::isNotBlank) ?: "contact"}"
+    } else {
+        "Replying to yourself"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.composerBarColor)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .width(5.dp)
+                .height(if (previewAttachment?.isImage == true || previewAttachment?.isVideo == true) 64.dp else 44.dp)
+                .background(theme.accentColor, RoundedCornerShape(2.dp)),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = title,
+                color = theme.replyQuoteSenderColor(message.isIncoming),
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            ReplyPreviewLine(
+                text = message.replyPreviewText(),
+                attachment = previewAttachment,
+                color = theme.incomingTextColor.copy(alpha = 0.9f),
+                fontSize = 15.sp,
+                maxLines = 2,
+            )
+        }
+        if (previewAttachment?.isImage == true || previewAttachment?.isVideo == true) {
+            ReplyAttachmentThumbnail(
+                attachment = previewAttachment,
+                attachmentResolver = attachmentResolver,
+                size = 64.dp,
+                cornerRadius = 8.dp,
+            )
+        }
+        Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = null,
+            modifier = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.06f))
+                .clickable(onClick = onCancel)
                 .semantics { contentDescription = "Cancel reply" },
-            color = theme.incomingTimestampColor,
+            tint = theme.incomingTimestampColor,
         )
     }
 }

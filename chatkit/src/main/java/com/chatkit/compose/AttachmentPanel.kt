@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.LruCache
 import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -476,9 +477,9 @@ private fun MediaThumbnailCell(
     onClick: () -> Unit,
 ) {
     val context = LocalContext.current
-    val thumbnail by produceState<ImageBitmap?>(null, item.id) {
+    val thumbnail by produceState<ImageBitmap?>(null, item.id, item.mediaType) {
         value = withContext(Dispatchers.IO) {
-            runCatching { loadThumbnail(context.contentResolver, item) }.getOrNull()
+            runCatching { loadCachedThumbnail(context.contentResolver, item) }.getOrNull()
         }
     }
     val selected = selectionIndex != null
@@ -564,6 +565,30 @@ private fun formatMediaDuration(durationMillis: Long): String {
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
 
+private const val MediaThumbnailCacheKilobytes = 12 * 1024
+private val MediaThumbnailCache = object : LruCache<String, ImageBitmap>(
+    MediaThumbnailCacheKilobytes,
+) {
+    override fun sizeOf(key: String, value: ImageBitmap): Int =
+        (value.width.toLong() * value.height.toLong() * 4L / 1024L)
+            .coerceAtLeast(1L)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
+}
+
+private fun loadCachedThumbnail(
+    cr: android.content.ContentResolver,
+    item: MediaItem,
+): ImageBitmap? {
+    val key = "${item.mediaType}:${item.id}"
+    synchronized(MediaThumbnailCache) {
+        MediaThumbnailCache.get(key)?.let { return it }
+    }
+    val thumbnail = loadThumbnail(cr, item) ?: return null
+    synchronized(MediaThumbnailCache) { MediaThumbnailCache.put(key, thumbnail) }
+    return thumbnail
+}
+
 private fun loadMediaItems(
     cr: android.content.ContentResolver,
     type: MediaType,
@@ -644,13 +669,15 @@ private fun loadThumbnail(
                 )?.asImageBitmap() ?: decodeSampledBitmap(cr, item.uri, 256, 256)
             }
             MediaType.Video -> {
-                runCatching {
-                    val r = android.media.MediaMetadataRetriever()
-                    r.setDataSource(null as android.content.Context?, item.uri)
-                    val bmp = r.getFrameAtTime(0)
-                    r.release()
-                    bmp?.asImageBitmap()
-                }.getOrNull()
+                val retriever = android.media.MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(null as android.content.Context?, item.uri)
+                    retriever.getFrameAtTime(0)?.asImageBitmap()
+                } catch (_: Exception) {
+                    null
+                } finally {
+                    runCatching { retriever.release() }
+                }
             }
         }
     }

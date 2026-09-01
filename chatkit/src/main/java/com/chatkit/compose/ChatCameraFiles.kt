@@ -76,7 +76,10 @@ internal object ChatCameraFiles {
             media.localFile?.let { video ->
                 val dir = video.parentFile ?: return@let null
                 val poster = videoPosterFile(dir, media.id)
-                if (writeUprightVideoPoster(video, poster)) poster.toUri() else null
+                // Poster extraction can decode a full video frame. Never do that from the
+                // send callback (which runs on the UI thread); use a pre-generated poster
+                // when one exists and let the bubble's async decoder handle the fallback.
+                poster.takeIf(File::exists)?.toUri()
             }
         } else {
             null
