@@ -146,7 +146,7 @@ public interface AttachmentResolver {
         onProgress: (Float) -> Unit = {},
     ): Uri?
 
-    /** Returns a poster URI for video content when available. */
+    /** Returns a poster/preview URI for image or video content when available. */
     public suspend fun resolvePoster(attachment: ChatAttachment): Uri? = attachment.posterUri
 
     /** Returns whether content can be rendered without starting a network transfer. */
