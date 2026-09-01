@@ -1,23 +1,34 @@
 package com.chatkit.compose
 
-import android.content.Intent
 import android.net.Uri
+import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -26,6 +37,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.InsertDriveFile
@@ -37,8 +49,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -51,6 +66,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -66,10 +82,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 
@@ -239,6 +262,7 @@ private fun MediaAttachmentGrid(
     onCancelDownload: (ChatAttachment) -> Unit,
     onRetryAttachment: (ChatAttachment) -> Unit,
 ) {
+    var showAlbumGallery by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -287,6 +311,7 @@ private fun MediaAttachmentGrid(
                                     onCancelUpload = onCancelUpload,
                                     onCancelDownload = onCancelDownload,
                                     onRetryAttachment = onRetryAttachment,
+                                    onOverflowTap = { showAlbumGallery = true },
                                 )
                             }
                         }
@@ -294,6 +319,15 @@ private fun MediaAttachmentGrid(
                 }
             }
         }
+    }
+    if (showAlbumGallery) {
+        MediaAlbumGallery(
+            attachments = attachments,
+            isVideo = isVideo,
+            automaticallyLoadsImages = automaticallyLoadsImages,
+            attachmentResolver = attachmentResolver,
+            onDismiss = { showAlbumGallery = false },
+        )
     }
 }
 
@@ -310,6 +344,7 @@ private fun MediaGridCell(
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit,
     onRetryAttachment: (ChatAttachment) -> Unit,
+    onOverflowTap: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -325,6 +360,7 @@ private fun MediaGridCell(
             compact = true,
             isBlurred = isOverflowTile,
             showsPlayControl = isVideo && !isOverflowTile,
+            openPreviewOnTap = !isOverflowTile,
             automaticallyLoadsImages = automaticallyLoadsImages,
             attachmentResolver = attachmentResolver,
             onCancelUpload = onCancelUpload,
@@ -336,7 +372,12 @@ private fun MediaGridCell(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(MediaTileShape)
-                    .background(Color.Black.copy(alpha = 0.58f)),
+                    .background(Color.Black.copy(alpha = 0.58f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onOverflowTap,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -344,6 +385,203 @@ private fun MediaGridCell(
                     color = Color.White,
                     fontSize = 28.sp,
                     fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+/** WhatsApp-style vertical album when the grid +N tile is tapped. */
+@Composable
+private fun MediaAlbumGallery(
+    attachments: List<ChatAttachment>,
+    isVideo: Boolean,
+    automaticallyLoadsImages: Boolean,
+    attachmentResolver: AttachmentResolver,
+    onDismiss: () -> Unit,
+) {
+    BackHandler(onBack = onDismiss)
+    var previewImageUri by remember { mutableStateOf<Uri?>(null) }
+    var previewImageName by remember { mutableStateOf<String?>(null) }
+    var previewVideoUri by remember { mutableStateOf<Uri?>(null) }
+    var previewVideoDuration by remember { mutableStateOf<Long?>(null) }
+    val title = if (isVideo) {
+        "${attachments.size} videos"
+    } else {
+        "${attachments.size} photos"
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF0B141A)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onDismiss)
+                        .semantics { contentDescription = "Back" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 4.dp),
+                )
+            }
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(attachments, key = { it.id }) { attachment ->
+                    MediaAlbumGalleryRow(
+                        attachment = attachment,
+                        isVideo = isVideo,
+                        automaticallyLoadsImages = automaticallyLoadsImages,
+                        attachmentResolver = attachmentResolver,
+                        onOpen = { uri ->
+                            if (isVideo) {
+                                previewVideoUri = uri
+                                previewVideoDuration = attachment.durationMillis
+                            } else {
+                                previewImageUri = uri
+                                previewImageName = attachment.fileName
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    previewImageUri?.let { uri ->
+        FullScreenImagePreview(
+            uri = uri,
+            fileName = previewImageName,
+            onDismiss = { previewImageUri = null },
+        )
+    }
+    previewVideoUri?.let { uri ->
+        FullScreenVideoPreview(
+            uri = uri,
+            fallbackDurationMillis = previewVideoDuration,
+            onDismiss = { previewVideoUri = null },
+        )
+    }
+}
+
+@Composable
+private fun MediaAlbumGalleryRow(
+    attachment: ChatAttachment,
+    isVideo: Boolean,
+    automaticallyLoadsImages: Boolean,
+    attachmentResolver: AttachmentResolver,
+    onOpen: (Uri) -> Unit,
+) {
+    val context = LocalContext.current
+    val resolvedUri by produceState<Uri?>(attachment.localUri, attachment.id, automaticallyLoadsImages) {
+        value = attachment.localUri
+            ?: runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
+    }
+    val posterUri by produceState<Uri?>(attachment.posterUri, attachment.id) {
+        value = attachment.posterUri
+            ?: runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull()
+    }
+    val displayUri = resolvedUri ?: posterUri
+    val bitmap by produceState<ImageBitmap?>(null, displayUri, resolvedUri, isVideo) {
+        value = displayUri?.let { uri ->
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    decodeAttachmentPreview(
+                        context,
+                        uri,
+                        preferVideo = isVideo && resolvedUri != null,
+                        maxSide = 1600,
+                    )?.asImageBitmap()
+                }.getOrNull()
+            }
+        }
+    }
+    val canOpen = resolvedUri != null
+    val aspectRatio = bitmap?.let { bmp ->
+        bmp.width.toFloat() / bmp.height.toFloat().coerceAtLeast(1f)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.Black.copy(alpha = 0.35f))
+            .clickable(enabled = canOpen && displayUri != null) {
+                resolvedUri?.let(onOpen)
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            bitmap != null && aspectRatio != null -> {
+                Image(
+                    bitmap = bitmap!!,
+                    contentDescription = attachment.fileName,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(aspectRatio),
+                    contentScale = ContentScale.FillWidth,
+                )
+            }
+            displayUri != null -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        color = Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+            }
+        }
+        if (isVideo && canOpen && bitmap != null) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Play video",
+                    tint = Color.White,
+                    modifier = Modifier.size(30.dp),
                 )
             }
         }
@@ -361,6 +599,7 @@ private fun MediaAttachmentTile(
     compact: Boolean,
     isBlurred: Boolean = false,
     showsPlayControl: Boolean = true,
+    openPreviewOnTap: Boolean = true,
     automaticallyLoadsImages: Boolean,
     attachmentResolver: AttachmentResolver,
     onCancelUpload: (ChatAttachment) -> Unit,
@@ -368,10 +607,15 @@ private fun MediaAttachmentTile(
     onRetryAttachment: (ChatAttachment) -> Unit = {},
 ) {
     val context = LocalContext.current
-    var previewUri by remember { mutableStateOf<Uri?>(null) }
+    var previewImageUri by remember { mutableStateOf<Uri?>(null) }
+    var previewVideoUri by remember { mutableStateOf<Uri?>(null) }
     var retryToken by remember(attachment.id) { mutableStateOf(0) }
-    var resolveCancelled by remember(attachment.id) { mutableStateOf(false) }
-    var downloadCancelled by remember(attachment.id) { mutableStateOf(false) }
+    var resolveCancelled by remember(attachment.id, attachment.transferState) {
+        mutableStateOf(attachment.transferState is TransferState.DownloadFailed)
+    }
+    var downloadCancelled by remember(attachment.id, attachment.transferState) {
+        mutableStateOf(attachment.transferState is TransferState.DownloadFailed)
+    }
     var resolveExhausted by remember(attachment.id, retryToken) { mutableStateOf(false) }
     val resolvedUri by produceState<Uri?>(
         attachment.localUri,
@@ -379,8 +623,15 @@ private fun MediaAttachmentTile(
         automaticallyLoadsImages,
         retryToken,
         resolveCancelled,
+        downloadCancelled,
     ) {
-        if (resolveCancelled) {
+        if (resolveCancelled || downloadCancelled) {
+            resolveExhausted = true
+            value = null
+            return@produceState
+        }
+        if (attachment.transferState is TransferState.DownloadFailed) {
+            downloadCancelled = true
             resolveExhausted = true
             value = null
             return@produceState
@@ -392,11 +643,12 @@ private fun MediaAttachmentTile(
         // permanent empty placeholder.
         var attempt = 0
         while (result == null && attempt < 12) {
+            if (resolveCancelled || downloadCancelled) break
             val available = runCatching { attachmentResolver.isAvailableLocally(attachment) }.getOrDefault(false)
             if (automaticallyLoadsImages || available || !attachment.isImage) {
                 result = runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
             }
-            if (result != null) break
+            if (result != null || resolveCancelled || downloadCancelled) break
             attempt += 1
             delay((750L * attempt).coerceAtMost(5_000L))
         }
@@ -505,18 +757,24 @@ private fun MediaAttachmentTile(
             .clip(MediaTileShape)
             .then(if (isBlurred) Modifier.blur(9.dp).scale(1.08f) else Modifier)
             .background(if (isVideo) Color.Black.copy(alpha = 0.78f) else theme.thumbnailPlaceholderBackgroundColor)
-            .clickable(enabled = !isTransferring && !hostFailed) {
+            .clickable(enabled = openPreviewOnTap && !isTransferring && !hostFailed) {
+                if (isVideo) {
+                    val videoUri = resolvedUri
+                    if (videoUri == null) {
+                        // Poster-only: retry full download instead of opening externally.
+                        retryToken += 1
+                        return@clickable
+                    }
+                    previewVideoUri = videoUri
+                    return@clickable
+                }
                 val openUri = resolvedUri ?: posterUri
                 if (openUri == null) {
                     // Tap empty placeholder to force another download attempt.
                     retryToken += 1
                     return@clickable
                 }
-                if (isVideo) {
-                    openAttachment(context, openUri, attachment.mimeType)
-                } else {
-                    previewUri = openUri
-                }
+                previewImageUri = openUri
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -527,7 +785,7 @@ private fun MediaAttachmentTile(
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
-        } else if (isVideo && !effectiveTransfer.isFailedTransfer && !waitingForMedia) {
+        } else if (isVideo && !effectiveTransfer.isTransferring && !effectiveTransfer.isFailedTransfer && !waitingForMedia) {
             Icon(
                 imageVector = Icons.Default.Videocam,
                 contentDescription = null,
@@ -588,20 +846,26 @@ private fun MediaAttachmentTile(
             onRetry = {
                 resolveCancelled = false
                 downloadCancelled = false
-                if (effectiveTransfer is TransferState.Failed) {
-                    onRetryAttachment(attachment)
-                } else {
+                onRetryAttachment(attachment)
+                if (effectiveTransfer !is TransferState.Failed) {
                     retryToken += 1
                 }
             },
         )
     }
 
-    previewUri?.let { uri ->
+    previewImageUri?.let { uri ->
         FullScreenImagePreview(
             uri = uri,
             fileName = attachment.fileName,
-            onDismiss = { previewUri = null },
+            onDismiss = { previewImageUri = null },
+        )
+    }
+    previewVideoUri?.let { uri ->
+        FullScreenVideoPreview(
+            uri = uri,
+            fallbackDurationMillis = attachment.durationMillis,
+            onDismiss = { previewVideoUri = null },
         )
     }
 }
@@ -700,6 +964,398 @@ private fun FullScreenImagePreview(
             }
         }
     }
+}
+
+/** In-app video viewer with WhatsApp-style chrome (tap controls, scrubber, back). */
+@Composable
+private fun FullScreenVideoPreview(
+    uri: Uri,
+    fallbackDurationMillis: Long?,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    BackHandler(onBack = onDismiss)
+    val player = remember(uri) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(uri))
+            prepare()
+            playWhenReady = true
+            repeatMode = Player.REPEAT_MODE_OFF
+        }
+    }
+    var isPlaying by remember { mutableStateOf(true) }
+    var controlsVisible by remember { mutableStateOf(true) }
+    var positionMs by remember { mutableLongStateOf(0L) }
+    var durationMs by remember {
+        mutableLongStateOf(fallbackDurationMillis?.coerceAtLeast(0L) ?: 0L)
+    }
+    var isScrubbing by remember { mutableStateOf(false) }
+    var scrubProgress by remember { mutableFloatStateOf(0f) }
+
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+                if (!playing) controlsVisible = true
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) {
+                    val readyDuration = player.duration
+                    if (readyDuration > 0L) durationMs = readyDuration
+                }
+                if (playbackState == Player.STATE_ENDED) {
+                    isPlaying = false
+                    controlsVisible = true
+                }
+            }
+        }
+        player.addListener(listener)
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
+    }
+
+    LaunchedEffect(isPlaying, controlsVisible) {
+        if (isPlaying && controlsVisible) {
+            delay(2_500)
+            if (isPlaying) controlsVisible = false
+        }
+    }
+
+    LaunchedEffect(player, isScrubbing, isPlaying) {
+        while (isActive) {
+            if (!isScrubbing) {
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                val liveDuration = player.duration
+                if (liveDuration > 0L) durationMs = liveDuration
+            }
+            delay(200)
+        }
+    }
+
+    val progress = when {
+        isScrubbing -> scrubProgress
+        durationMs > 0L -> (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+        else -> 0f
+    }
+
+    fun togglePlayback() {
+        if (player.isPlaying) {
+            player.pause()
+        } else {
+            if (player.playbackState == Player.STATE_ENDED) {
+                player.seekTo(0L)
+            }
+            player.play()
+        }
+        controlsVisible = true
+    }
+
+    fun seekToProgress(fraction: Float) {
+        if (durationMs <= 0L) return
+        val target = (durationMs * fraction.coerceIn(0f, 1f)).toLong()
+        player.seekTo(target)
+        positionMs = target
+    }
+
+    Dialog(
+        onDismissRequest = {
+            player.pause()
+            onDismiss()
+        },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        this.player = player
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                    }
+                },
+                update = { it.player = player },
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            controlsVisible = !controlsVisible
+                        }
+                    },
+            )
+
+            AnimatedVisibility(
+                visible = controlsVisible,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.22f)
+                        .align(Alignment.TopCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = 0.72f),
+                                    Color.Transparent,
+                                ),
+                            ),
+                        ),
+                )
+            }
+
+            AnimatedVisibility(
+                visible = controlsVisible,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .statusBarsPadding()
+                        .padding(start = 4.dp, top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .clickable {
+                                player.pause()
+                                onDismiss()
+                            }
+                            .semantics { contentDescription = "Back" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
+                }
+            }
+
+            if (!isPlaying) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .clickable(onClick = ::togglePlayback)
+                        .semantics { contentDescription = "Play video" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(42.dp),
+                    )
+                }
+            } else {
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.Center),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.45f))
+                            .clickable(onClick = ::togglePlayback)
+                            .semantics { contentDescription = "Pause video" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Pause,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(42.dp),
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = controlsVisible,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.Black.copy(alpha = 0.78f),
+                                ),
+                            ),
+                        )
+                        .navigationBarsPadding()
+                        .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 14.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = formatVideoClock(positionMs),
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = formatVideoClock(durationMs),
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    WhatsAppVideoScrubber(
+                        progress = progress,
+                        onScrubStart = {
+                            isScrubbing = true
+                            scrubProgress = progress
+                        },
+                        onScrubChange = { fraction ->
+                            scrubProgress = fraction
+                        },
+                        onScrubEnd = { fraction ->
+                            isScrubbing = false
+                            seekToProgress(fraction)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WhatsAppVideoScrubber(
+    progress: Float,
+    onScrubStart: () -> Unit,
+    onScrubChange: (Float) -> Unit,
+    onScrubEnd: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val trackColor = Color.White.copy(alpha = 0.35f)
+    val activeColor = Color.White
+    val thumbColor = Color.White
+    var dragging by remember { mutableStateOf(false) }
+    var localProgress by remember { mutableFloatStateOf(progress) }
+
+    LaunchedEffect(progress, dragging) {
+        if (!dragging) localProgress = progress
+    }
+
+    Box(
+        modifier = modifier
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    onScrubStart()
+                    dragging = true
+                    val fraction = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                    localProgress = fraction
+                    onScrubChange(fraction)
+                    dragging = false
+                    onScrubEnd(fraction)
+                }
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = {
+                        onScrubStart()
+                        dragging = true
+                    },
+                    onDragEnd = {
+                        dragging = false
+                        onScrubEnd(localProgress)
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        onScrubEnd(localProgress)
+                    },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        val width = size.width.toFloat().coerceAtLeast(1f)
+                        localProgress = (localProgress + dragAmount / width).coerceIn(0f, 1f)
+                        onScrubChange(localProgress)
+                    },
+                )
+            },
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val trackHeight = 3.dp.toPx()
+            val centerY = size.height / 2f
+            val trackWidth = size.width
+            val clamped = localProgress.coerceIn(0f, 1f)
+            drawRoundRect(
+                color = trackColor,
+                topLeft = Offset(0f, centerY - trackHeight / 2f),
+                size = Size(trackWidth, trackHeight),
+                cornerRadius = CornerRadius(trackHeight),
+            )
+            val activeWidth = trackWidth * clamped
+            if (activeWidth > 0f) {
+                drawRoundRect(
+                    color = activeColor,
+                    topLeft = Offset(0f, centerY - trackHeight / 2f),
+                    size = Size(activeWidth, trackHeight),
+                    cornerRadius = CornerRadius(trackHeight),
+                )
+            }
+            val thumbRadius = if (dragging) 7.dp.toPx() else 5.dp.toPx()
+            drawCircle(
+                color = thumbColor,
+                radius = thumbRadius,
+                center = Offset(
+                    activeWidth.coerceIn(thumbRadius, trackWidth - thumbRadius),
+                    centerY,
+                ),
+            )
+        }
+    }
+}
+
+private fun formatVideoClock(durationMs: Long): String {
+    val totalSeconds = (durationMs / 1_000L).toInt().coerceAtLeast(0)
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d".format(minutes, seconds)
 }
 
 @Composable
@@ -802,7 +1458,7 @@ internal fun VoiceMessageRow(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Cancel upload",
                         tint = playIcon,
-                        modifier = Modifier.size(12.dp),
+                        modifier = Modifier.size(16.dp),
                     )
                 }
                 is TransferState.Downloading -> {
@@ -816,7 +1472,7 @@ internal fun VoiceMessageRow(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Cancel download",
                         tint = playIcon,
-                        modifier = Modifier.size(12.dp),
+                        modifier = Modifier.size(16.dp),
                     )
                 }
                 TransferState.Failed -> Icon(
@@ -975,6 +1631,7 @@ private fun AttachmentTransferOverlay(
 ) {
     val controlSize = if (compact) 36.dp else 52.dp
     val iconSize = if (compact) 20.dp else 28.dp
+    val cancelIconSize = if (compact) 18.dp else 24.dp
     when (transferState) {
         is TransferState.Uploading -> {
             Box(
@@ -995,7 +1652,7 @@ private fun AttachmentTransferOverlay(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Cancel upload",
                         tint = Color.White,
-                        modifier = Modifier.size(if (compact) 12.dp else 14.dp),
+                        modifier = Modifier.size(cancelIconSize),
                     )
                 }
             }
@@ -1027,7 +1684,7 @@ private fun AttachmentTransferOverlay(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Cancel download",
                         tint = Color.White,
-                        modifier = Modifier.size(if (compact) 12.dp else 14.dp),
+                        modifier = Modifier.size(cancelIconSize),
                     )
                 }
             }
@@ -1087,13 +1744,4 @@ private fun AttachmentTransferOverlay(
 internal fun formatAttachmentDuration(durationMillis: Long): String {
     val totalSeconds = (durationMillis / 1000L).toInt().coerceAtLeast(0)
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
-}
-
-private fun openAttachment(context: android.content.Context, uri: Uri, mimeType: String?) {
-    val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, mimeType ?: context.contentResolver.getType(uri) ?: "*/*")
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-    runCatching { context.startActivity(intent) }
 }

@@ -126,6 +126,7 @@ public fun ChatView(
     onOptimisticMessage: (ChatMessage) -> Unit = {},
     onCancelAttachmentUpload: (ChatAttachment) -> Unit = {},
     onCancelAttachmentDownload: (ChatAttachment) -> Unit = {},
+    onRetryAttachmentDownload: (ChatAttachment) -> Unit = {},
     onMessageRetry: (String) -> Unit = {},
     modificationWindowMillis: Long = 15 * 60 * 1000L,
     onEditMessage: ((String, String) -> Unit)? = null,
@@ -483,6 +484,7 @@ public fun ChatView(
                 attachmentResolver = attachmentResolver,
                 onCancelAttachmentUpload = onCancelAttachmentUpload,
                 onCancelAttachmentDownload = onCancelAttachmentDownload,
+                onRetryAttachmentDownload = onRetryAttachmentDownload,
                 audioPlayer = audioPlayer,
                 deliveryStatusContent = deliveryStatusContent,
                 onMessageEditingChanged = { isEditingMessage = it },
@@ -597,7 +599,7 @@ public fun ChatView(
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
-                                            .heightIn(min = 36.dp, max = 100.dp)
+                                            .heightIn(min = ComposerBarControlSize, max = 100.dp)
                                             .clip(ComposerFieldShape)
                                             .border(
                                                 1.dp,
@@ -608,7 +610,7 @@ public fun ChatView(
                                                 theme.composerFieldBackground,
                                                 ComposerFieldShape,
                                             )
-                                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                                            .padding(horizontal = 12.dp, vertical = 11.dp),
                                         contentAlignment = Alignment.CenterStart,
                                     ) {
                                         BasicTextField(
@@ -626,6 +628,7 @@ public fun ChatView(
                                             textStyle = MaterialTheme.typography.bodyMedium.copy(
                                                 color = theme.incomingTextColor,
                                                 fontSize = 14.sp,
+                                                lineHeight = 20.sp,
                                             ),
                                             cursorBrush = SolidColor(theme.accentColor),
                                             keyboardOptions = KeyboardOptions(
@@ -633,12 +636,16 @@ public fun ChatView(
                                             ),
                                             maxLines = 4,
                                             decorationBox = { field ->
-                                                Box(contentAlignment = Alignment.CenterStart) {
+                                                Box(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    contentAlignment = Alignment.CenterStart,
+                                                ) {
                                                     if (draft.isEmpty()) {
                                                         Text(
                                                             text = composerPlaceholder,
                                                             color = theme.incomingTimestampColor,
                                                             fontSize = 14.sp,
+                                                            lineHeight = 20.sp,
                                                             maxLines = 1,
                                                             overflow = TextOverflow.Ellipsis,
                                                         )
@@ -812,7 +819,7 @@ internal fun ComposerButton(
 ) {
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(ComposerBarControlSize)
             .semantics {
                 role = Role.Button
                 this.contentDescription = contentDescription
@@ -838,6 +845,8 @@ internal fun ComposerButton(
 }
 
 private val ComposerFieldShape = RoundedCornerShape(18.dp)
+/** Matches [ComposerButton] / mic hit target so the field lines up on one row. */
+private val ComposerBarControlSize = 44.dp
 
 @Composable
 internal fun PendingAttachments(

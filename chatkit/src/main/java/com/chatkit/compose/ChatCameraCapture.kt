@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import android.graphics.Rect as AndroidRect
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewGroup
@@ -68,6 +69,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
@@ -93,11 +96,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.composed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -108,13 +115,16 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -123,6 +133,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -777,24 +788,42 @@ private fun ReviewScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(start = 6.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
-                onClick = onRetake,
-                modifier = Modifier.semantics { contentDescription = "Retake" },
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onRetake)
+                    .semantics { contentDescription = "Retake" },
+                contentAlignment = Alignment.Center,
             ) {
-                Text("Retake", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
             }
-            Spacer(Modifier.weight(1f))
         }
 
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            contentAlignment = Alignment.Center,
+                .then(
+                    if (capture.mediaType == MediaType.Photo) {
+                        Modifier.padding(horizontal = 8.dp)
+                    } else {
+                        Modifier
+                    },
+                ),
+            contentAlignment = if (capture.mediaType == MediaType.Video) {
+                Alignment.TopCenter
+            } else {
+                Alignment.Center
+            },
         ) {
             when (capture.mediaType) {
                 MediaType.Photo -> {
@@ -824,6 +853,7 @@ private fun ReviewScreen(
                         onTrimChanged = { start, end ->
                             viewModel.updateTrim(start, end, capture.durationSeconds ?: 0.0)
                         },
+                        placeTrimAtTop = true,
                     )
                 }
             }
@@ -889,6 +919,7 @@ private fun VideoReviewPlayer(
     trimRange: VideoTrimRange,
     totalSeconds: Double,
     onTrimChanged: (Double, Double) -> Unit,
+    placeTrimAtTop: Boolean = false,
 ) {
     val context = LocalContext.current
     val player = remember {
@@ -953,67 +984,121 @@ private fun VideoReviewPlayer(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            contentAlignment = Alignment.Center,
+            contentAlignment = Alignment.TopCenter,
         ) {
-            AndroidView(
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        useController = false
-                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        this.player = player
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                        )
-                    }
-                },
-                update = { it.player = player },
-                modifier = Modifier.fillMaxSize(),
-            )
             Box(
                 modifier = Modifier
-                    .size(56.dp)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.45f))
-                    .semantics {
-                        role = Role.Button
-                        contentDescription = if (isPlaying) "Pause video" else "Play video"
-                    }
-                    .clickable {
-                        if (player.isPlaying) {
-                            player.pause()
-                            isPlaying = false
-                        } else {
-                            val startMs = (trimRange.startSeconds * 1000).toLong()
-                            if (player.currentPosition < startMs ||
-                                player.currentPosition >= (trimRange.endSeconds * 1000).toLong() - 40
-                            ) {
-                                player.seekTo(startMs)
-                            }
-                            player.play()
-                            isPlaying = true
+                    .fillMaxWidth()
+                    .aspectRatio(9f / 16f),
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            useController = false
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            this.player = player
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                            )
                         }
                     },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(28.dp),
+                    update = { view ->
+                        view.player = player
+                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    },
+                    modifier = Modifier.fillMaxSize(),
                 )
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .align(Alignment.Center)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .semantics {
+                            role = Role.Button
+                            contentDescription = if (isPlaying) "Pause video" else "Play video"
+                        }
+                        .clickable {
+                            if (player.isPlaying) {
+                                player.pause()
+                                isPlaying = false
+                            } else {
+                                val startMs = (trimRange.startSeconds * 1000).toLong()
+                                if (player.currentPosition < startMs ||
+                                    player.currentPosition >= (trimRange.endSeconds * 1000).toLong() - 40
+                                ) {
+                                    player.seekTo(startMs)
+                                }
+                                player.play()
+                                isPlaying = true
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp),
+                    )
+                }
+
+                if (placeTrimAtTop && totalSeconds > 0.0) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Black.copy(alpha = 0.72f),
+                                        Color.Black.copy(alpha = 0.35f),
+                                        Color.Transparent,
+                                    ),
+                                ),
+                            )
+                            .padding(top = 8.dp, bottom = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = formatDuration(playheadSeconds.toDouble()),
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(50))
+                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                        )
+                        VideoTrimBar(
+                            frames = frames,
+                            totalSeconds = totalSeconds,
+                            range = trimRange,
+                            playheadSeconds = playheadSeconds.toDouble(),
+                            onTrimChanged = onTrimChanged,
+                            onScrub = { seconds, dragging ->
+                                isScrubbing = dragging
+                                seekToSeconds(seconds, pause = true)
+                            },
+                            trimModifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 40.dp)
+                                .padding(top = 8.dp),
+                        )
+                    }
+                }
             }
         }
 
-        Text(
-            text = "${formatDuration(playheadSeconds.toDouble())} / ${formatDuration(trimRange.durationSeconds)}",
-            color = Color.White.copy(alpha = 0.85f),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
-        )
+        if (!placeTrimAtTop && totalSeconds > 0.0) {
+            Text(
+                text = "${formatDuration(playheadSeconds.toDouble())} / ${formatDuration(trimRange.durationSeconds)}",
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
+            )
 
-        if (totalSeconds > 0.0) {
             VideoTrimBar(
                 frames = frames,
                 totalSeconds = totalSeconds,
@@ -1026,7 +1111,7 @@ private fun VideoReviewPlayer(
                 },
                 trimModifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(horizontal = 40.dp, vertical = 10.dp),
             )
         }
     }
@@ -1045,27 +1130,39 @@ private fun VideoTrimBar(
     trimModifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    val handleWidth = 16.dp
-    val handleWidthPx = with(density) { handleWidth.toPx() }
+    val handleVisualWidth = 16.dp
+    val handleVisualWidthPx = with(density) { handleVisualWidth.toPx() }
     val hitSlopPx = with(density) { 28.dp.toPx() }
-    val barHeight = 64.dp
+    val barHeight = 48.dp
+    val railThickness = 2.5.dp
+    val playheadWidth = 4.dp
+    val playheadWidthPx = with(density) { playheadWidth.toPx() }
     val latestRange by rememberUpdatedState(range)
     val latestOnTrimChanged by rememberUpdatedState(onTrimChanged)
     val latestOnScrub by rememberUpdatedState(onScrub)
+    val gestureExclusionVerticalPadPx = with(density) { 16.dp.roundToPx() }
+    val rootView = LocalView.current
 
     BoxWithConstraints(
         modifier = trimModifier
             .height(barHeight)
-            .clip(RoundedCornerShape(10.dp)),
+            .systemGestureExclusionBand(extraVerticalPx = gestureExclusionVerticalPadPx),
     ) {
         val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val safeTotal = totalSeconds.coerceAtLeast(0.001)
         val startFraction = (range.startSeconds / safeTotal).toFloat().coerceIn(0f, 1f)
         val endFraction = (range.endSeconds / safeTotal).toFloat().coerceIn(0f, 1f)
         val playFraction = (playheadSeconds / safeTotal).toFloat().coerceIn(0f, 1f)
+        val startX = startFraction * widthPx
+        val endX = endFraction * widthPx
+        val selectionWidth = (endX - startX).coerceAtLeast(0f)
 
-        // Filmstrip
-        Row(modifier = Modifier.fillMaxSize()) {
+        // Filmstrip — clip only thumbnails so bracket handles are not cropped.
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(10.dp)),
+        ) {
             if (frames.isEmpty()) {
                 Box(
                     Modifier
@@ -1106,68 +1203,88 @@ private fun VideoTrimBar(
             )
         }
 
-        // Selection frame
-        Box(
-            Modifier
-                .fillMaxHeight()
-                .padding(
-                    start = maxWidth * startFraction,
-                    end = maxWidth * (1f - endFraction),
+        // Selected region top/bottom rails (between inner handle edges).
+        if (selectionWidth > 0f) {
+            Box(
+                Modifier
+                    .offset { IntOffset(startX.roundToInt(), 0) }
+                    .width(with(density) { selectionWidth.toDp() })
+                    .fillMaxHeight(),
+            ) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(railThickness)
+                        .background(Color.White),
                 )
-                .border(2.5.dp, Color.White, RoundedCornerShape(8.dp)),
-        )
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(railThickness)
+                        .background(Color.White),
+                )
+            }
+        }
 
-        // Playhead
-        Box(
-            Modifier
-                .offset {
-                    IntOffset(
-                        x = ((playFraction * widthPx) - with(density) { 1.dp.toPx() }).roundToInt(),
-                        y = 0,
-                    )
-                }
-                .width(2.dp)
-                .fillMaxHeight()
-                .background(Color(0xFFFF3B30)),
-        )
-
-        // Start handle
-        TrimHandle(
+        // White drag handles — trim in/out on the inner vertical edges only.
+        // Start bracket — inner-right vertical edge marks trim in-point.
+        TrimDragHandle(
             leading = true,
+            width = handleVisualWidth,
             modifier = Modifier
+                .zIndex(1f)
                 .offset {
                     IntOffset(
-                        x = ((startFraction * widthPx) - handleWidthPx / 2f).roundToInt(),
+                        x = (startX - handleVisualWidthPx).roundToInt(),
                         y = 0,
                     )
                 }
-                .width(handleWidth)
                 .fillMaxHeight()
                 .semantics { contentDescription = "Trim start" },
         )
-        // End handle
-        TrimHandle(
+        // End bracket — inner-left vertical edge marks trim out-point.
+        TrimDragHandle(
             leading = false,
+            width = handleVisualWidth,
             modifier = Modifier
+                .zIndex(1f)
                 .offset {
                     IntOffset(
-                        x = ((endFraction * widthPx) - handleWidthPx / 2f).roundToInt(),
+                        x = endX.roundToInt(),
                         y = 0,
                     )
                 }
-                .width(handleWidth)
                 .fillMaxHeight()
                 .semantics { contentDescription = "Trim end" },
         )
 
-        // Unified gesture layer — keep pointerInput keys stable so drag is not cancelled mid-scrub.
+        // Playhead — above handles visually; touches pass through to the gesture layer.
         Box(
             Modifier
+                .zIndex(2f)
+                .offset {
+                    IntOffset(
+                        x = (playFraction * widthPx - playheadWidthPx / 2f).roundToInt(),
+                        y = 0,
+                    )
+                }
+                .width(playheadWidth)
+                .fillMaxHeight()
+                .background(Color(0xFFBF5AF2), RoundedCornerShape(50)),
+        )
+
+        // Unified gesture layer — must sit above visuals so handle drags are not blocked.
+        Box(
+            Modifier
+                .zIndex(10f)
                 .fillMaxSize()
-                .pointerInput(safeTotal) {
+                .pointerInput(safeTotal, handleVisualWidthPx, hitSlopPx) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val w = size.width.toFloat().coerceAtLeast(1f)
+                        val handlePx = handleVisualWidthPx
                         fun xToSeconds(x: Float): Double =
                             ((x / w).coerceIn(0f, 1f) * safeTotal)
 
@@ -1176,57 +1293,70 @@ private fun VideoTrimBar(
                         val endX = (rangeAtDown.endSeconds / safeTotal).toFloat() * w
                         val x = down.position.x
                         val mode = when {
-                            abs(x - startX) <= hitSlopPx -> TrimDragMode.Start
-                            abs(x - endX) <= hitSlopPx -> TrimDragMode.End
+                            x in (startX - handlePx)..(startX + hitSlopPx) -> TrimDragMode.Start
+                            x in (endX - hitSlopPx)..(endX + handlePx) -> TrimDragMode.End
                             x in startX..endX -> TrimDragMode.Window
                             else -> null
                         } ?: return@awaitEachGesture
+
+                        down.consume()
+                        (rootView.parent as? ViewGroup)?.requestDisallowInterceptTouchEvent(true)
 
                         var localStart = rangeAtDown.startSeconds
                         var localEnd = rangeAtDown.endSeconds
                         val windowStartAtDown = localStart
                         val windowEndAtDown = localEnd
                         val downX = x
+                        // Keep the inner handle edge under the finger while dragging.
+                        val trimAnchorOffsetX = when (mode) {
+                            TrimDragMode.Start -> x - startX
+                            TrimDragMode.End -> x - endX
+                            TrimDragMode.Window -> 0f
+                        }
 
                         latestOnScrub(
                             when (mode) {
                                 TrimDragMode.Start -> localStart
                                 TrimDragMode.End -> localEnd
-                                TrimDragMode.Window -> xToSeconds(x)
+                                TrimDragMode.Window -> xToSeconds(x).coerceIn(localStart, localEnd)
                             },
                             true,
                         )
 
-                        drag(down.id) { change ->
-                            change.consume()
-                            val currentX = change.position.x
-                            when (mode) {
-                                TrimDragMode.Start -> {
-                                    localStart = xToSeconds(currentX)
-                                    latestOnTrimChanged(localStart, localEnd)
-                                    latestOnScrub(localStart, true)
-                                }
-                                TrimDragMode.End -> {
-                                    localEnd = xToSeconds(currentX)
-                                    latestOnTrimChanged(localStart, localEnd)
-                                    latestOnScrub(localEnd, true)
-                                }
-                                TrimDragMode.Window -> {
-                                    val delta = ((currentX - downX) / w) * safeTotal
-                                    val moved = moveTrimWindow(
-                                        VideoTrimRange(windowStartAtDown, windowEndAtDown),
-                                        delta,
-                                        safeTotal,
-                                    )
-                                    localStart = moved.startSeconds
-                                    localEnd = moved.endSeconds
-                                    latestOnTrimChanged(localStart, localEnd)
-                                    latestOnScrub(
-                                        xToSeconds(currentX).coerceIn(localStart, localEnd),
-                                        true,
-                                    )
+                        try {
+                            drag(down.id) { change ->
+                                change.consume()
+                                val currentX = change.position.x
+                                when (mode) {
+                                    TrimDragMode.Start -> {
+                                        localStart = xToSeconds(currentX - trimAnchorOffsetX)
+                                        latestOnTrimChanged(localStart, localEnd)
+                                        latestOnScrub(localStart, true)
+                                    }
+                                    TrimDragMode.End -> {
+                                        localEnd = xToSeconds(currentX - trimAnchorOffsetX)
+                                        latestOnTrimChanged(localStart, localEnd)
+                                        latestOnScrub(localEnd, true)
+                                    }
+                                    TrimDragMode.Window -> {
+                                        val delta = ((currentX - downX) / w) * safeTotal
+                                        val moved = moveTrimWindow(
+                                            VideoTrimRange(windowStartAtDown, windowEndAtDown),
+                                            delta,
+                                            safeTotal,
+                                        )
+                                        localStart = moved.startSeconds
+                                        localEnd = moved.endSeconds
+                                        latestOnTrimChanged(localStart, localEnd)
+                                        latestOnScrub(
+                                            xToSeconds(currentX).coerceIn(localStart, localEnd),
+                                            true,
+                                        )
+                                    }
                                 }
                             }
+                        } finally {
+                            (rootView.parent as? ViewGroup)?.requestDisallowInterceptTouchEvent(false)
                         }
                         latestOnScrub(
                             when (mode) {
@@ -1243,29 +1373,30 @@ private fun VideoTrimBar(
 }
 
 @Composable
-private fun TrimHandle(
+private fun TrimDragHandle(
     leading: Boolean,
+    width: Dp,
     modifier: Modifier = Modifier,
 ) {
     Box(
         modifier = modifier
+            .width(width)
             .background(
                 Color.White,
                 RoundedCornerShape(
-                    topStart = if (leading) 8.dp else 0.dp,
-                    bottomStart = if (leading) 8.dp else 0.dp,
-                    topEnd = if (leading) 0.dp else 8.dp,
-                    bottomEnd = if (leading) 0.dp else 8.dp,
+                    topStart = if (leading) 6.dp else 0.dp,
+                    bottomStart = if (leading) 6.dp else 0.dp,
+                    topEnd = if (leading) 0.dp else 6.dp,
+                    bottomEnd = if (leading) 0.dp else 6.dp,
                 ),
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier
-                .width(3.dp)
-                .height(22.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(Color.Black.copy(alpha = 0.35f)),
+        Icon(
+            imageVector = if (leading) Icons.Default.ChevronLeft else Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = Color(0xFF3C3C43),
+            modifier = Modifier.size(20.dp),
         )
     }
 }
@@ -1386,4 +1517,39 @@ private fun formatDuration(seconds: Double): String {
     val m = total / 60
     val s = total % 60
     return "%d:%02d".format(m, s)
+}
+
+/**
+ * Reserves a full-width horizontal band (trim bar row) from the system back-swipe
+ * gesture so handle drags near the screen edge are not interpreted as navigation.
+ */
+private fun Modifier.systemGestureExclusionBand(
+    extraVerticalPx: Int = 0,
+): Modifier = composed {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        onDispose {
+            ViewCompat.setSystemGestureExclusionRects(view, emptyList())
+        }
+    }
+    Modifier.onGloballyPositioned { coordinates ->
+        if (!coordinates.isAttached) return@onGloballyPositioned
+        val viewLocation = IntArray(2)
+        view.getLocationInWindow(viewLocation)
+        val bounds = coordinates.boundsInWindow()
+        val top = (bounds.top - viewLocation[1] - extraVerticalPx).toFloat().coerceAtLeast(0f)
+        val bottom = (bounds.bottom - viewLocation[1] + extraVerticalPx).toFloat()
+            .coerceAtMost(view.height.toFloat())
+        ViewCompat.setSystemGestureExclusionRects(
+            view,
+            listOf(
+                AndroidRect(
+                    0,
+                    top.toInt(),
+                    view.width,
+                    bottom.toInt(),
+                ),
+            ),
+        )
+    }
 }

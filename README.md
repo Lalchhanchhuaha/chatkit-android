@@ -39,11 +39,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.6")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.7")
 }
 ```
 
-For development snapshots, replace `v1.6.6` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.7` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -120,13 +120,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.6`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.7`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.7 | In-app full-screen video player; media album gallery; `onRetryAttachmentDownload`; camera trim/review polish |
 | 1.6.6 | Attachment upload/download cancel (X) and retry; image poster fallback; `onCancelAttachmentDownload` |
 | 1.6.5 | iOS-parity attachment kind routing; image↔video preview decode fallback; download fail/retry UI |
 | 1.6.4 | Fix video thumbnail rotation on send/receive; preserve trim orientation metadata |

@@ -119,6 +119,7 @@ internal fun MessageList(
     attachmentResolver: AttachmentResolver = AttachmentResolver.None,
     onCancelAttachmentUpload: (ChatAttachment) -> Unit = {},
     onCancelAttachmentDownload: (ChatAttachment) -> Unit = {},
+    onRetryAttachmentDownload: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
     onMessageEditingChanged: (Boolean) -> Unit = {},
@@ -237,6 +238,7 @@ internal fun MessageList(
                             attachmentResolver = attachmentResolver,
                             onCancelAttachmentUpload = onCancelAttachmentUpload,
                             onCancelAttachmentDownload = onCancelAttachmentDownload,
+                            onRetryAttachmentDownload = onRetryAttachmentDownload,
                             audioPlayer = audioPlayer,
                             deliveryStatusContent = deliveryStatusContent,
                             onEditingChanged = onMessageEditingChanged,
@@ -340,6 +342,7 @@ internal fun MessageBubble(
     attachmentResolver: AttachmentResolver = AttachmentResolver.None,
     onCancelAttachmentUpload: (ChatAttachment) -> Unit = {},
     onCancelAttachmentDownload: (ChatAttachment) -> Unit = {},
+    onRetryAttachmentDownload: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
     onEditingChanged: (Boolean) -> Unit = {},
@@ -558,7 +561,7 @@ internal fun MessageBubble(
                                 attachmentResolver = attachmentResolver,
                                 onCancelUpload = onCancelAttachmentUpload,
                                 onCancelDownload = onCancelAttachmentDownload,
-                                onRetryAttachment = { onRetry() },
+                                onRetryAttachment = onRetryAttachmentDownload,
                                 audioPlayer = audioPlayer,
                             )
                         }
