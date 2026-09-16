@@ -154,6 +154,8 @@ internal fun MessageList(
     val chronologicalItems = remember(messageSnapshot) { buildTranscriptItems(messageSnapshot) }
     val invertedItems = remember(chronologicalItems) { chronologicalItems.asReversed() }
     var trackedLastId by remember { mutableStateOf(messageSnapshot.lastOrNull()?.id) }
+    var previousMessageIds by remember { mutableStateOf<Set<String>?>(null) }
+    var hasPositionedTranscript by remember { mutableStateOf(false) }
     var requestedForOldestId by remember { mutableStateOf<String?>(null) }
     val currentLoadPreviousMessages by rememberUpdatedState(onLoadPreviousMessages)
 
@@ -191,12 +193,40 @@ internal fun MessageList(
             .collect(onNewestVisibilityChanged)
     }
 
-    LaunchedEffect(messageSnapshot.lastOrNull()?.id, invertedItems.size) {
+    LaunchedEffect(messageSnapshot) {
         val last = messageSnapshot.lastOrNull()
         val lastId = last?.id
-        if (lastId == null || lastId == trackedLastId) return@LaunchedEffect
+        if (lastId == null || invertedItems.isEmpty()) {
+            // A temporarily empty list is how hosts commonly represent a chat
+            // switch while the next conversation is loading. The next non-empty
+            // snapshot must be positioned as a fresh transcript.
+            hasPositionedTranscript = false
+            previousMessageIds = null
+            trackedLastId = null
+            return@LaunchedEffect
+        }
+
+        val currentMessageIds = messageSnapshot.asSequence().map(ChatMessage::id).toSet()
+        val isDifferentTranscript = previousMessageIds?.let { previousIds ->
+            previousIds.isNotEmpty() && previousIds.intersect(currentMessageIds).isEmpty()
+        } == true
+
+        if (!hasPositionedTranscript || isDifferentTranscript) {
+            // Establish the iOS-style initial position without an animation. A
+            // newly opened chat should render its newest messages immediately,
+            // even when this ChatView instance was previously showing history.
+            listState.scrollToItem(0)
+            onUnreadIncomingCountChanged(0)
+            onNewestVisibilityChanged(true)
+            trackedLastId = lastId
+            previousMessageIds = currentMessageIds
+            hasPositionedTranscript = true
+            return@LaunchedEffect
+        }
+
+        previousMessageIds = currentMessageIds
+        if (lastId == trackedLastId) return@LaunchedEffect
         trackedLastId = lastId
-        if (invertedItems.isEmpty()) return@LaunchedEffect
         if (isViewingNewest || last.direction == MessageDirection.Outgoing) {
             // Stable keys keep the previously visible row anchored when index 0
             // is inserted. Wait until that row is laid out, then scroll so the

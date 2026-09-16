@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Reply
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -278,7 +279,8 @@ public fun ChatView(
 
     fun canSelectMessage(message: ChatMessage): Boolean {
         if (message.text.contains("was deleted", ignoreCase = true)) return false
-        return onDeleteMessage != null ||
+        return (swipeToReplyEnabled && showsComposer) ||
+            onDeleteMessage != null ||
             (onEditMessage != null && message.canEdit(Instant.now(), modificationWindowMillis) &&
                 message.attachments.isEmpty())
     }
@@ -298,6 +300,13 @@ public fun ChatView(
         } else {
             selectedMessageIds + message.id
         }
+    }
+
+    fun replyToSelectedMessage() {
+        val selected = displayedMessages.singleOrNull { it.id in selectedMessageIds } ?: return
+        selectedMessageIds = emptySet()
+        replyingTo = selected
+        onReplyToMessage(selected)
     }
 
     fun beginEditingSelected() {
@@ -543,7 +552,10 @@ public fun ChatView(
                 },
                 isMessageSelectionMode = isMessageSelectionMode,
                 selectedMessageIds = selectedMessageIds,
-                onMessageLongPress = if (onEditMessage != null || onDeleteMessage != null) {
+                onMessageLongPress = if (
+                    (swipeToReplyEnabled && showsComposer) ||
+                        onEditMessage != null || onDeleteMessage != null
+                ) {
                     ::beginMessageSelection
                 } else {
                     null
@@ -603,6 +615,7 @@ public fun ChatView(
                 val selectedMessages = displayedMessages.filter { it.id in selectedMessageIds }
                 MessageSelectionToolbar(
                     count = selectedMessageIds.size,
+                    canReply = selectedMessages.size == 1 && swipeToReplyEnabled && showsComposer,
                     canEdit = selectedMessages.size == 1 &&
                         selectedMessages.firstOrNull()?.let {
                             onEditMessage != null && it.attachments.isEmpty() &&
@@ -611,6 +624,7 @@ public fun ChatView(
                     canDelete = onDeleteMessage != null,
                     theme = theme,
                     onCancel = { selectedMessageIds = emptySet() },
+                    onReply = ::replyToSelectedMessage,
                     onEdit = ::beginEditingSelected,
                     onDelete = ::deleteSelectedMessages,
                 )
@@ -919,10 +933,12 @@ private fun EditingComposerPreview(
 @Composable
 private fun MessageSelectionToolbar(
     count: Int,
+    canReply: Boolean,
     canEdit: Boolean,
     canDelete: Boolean,
     theme: ChatTheme,
     onCancel: () -> Unit,
+    onReply: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -951,6 +967,24 @@ private fun MessageSelectionToolbar(
             fontWeight = FontWeight.SemiBold,
         )
         Spacer(Modifier.weight(1f))
+        if (canReply) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(theme.accentColor)
+                    .clickable(onClick = onReply)
+                    .semantics { contentDescription = "Reply to message" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Reply,
+                    contentDescription = null,
+                    tint = theme.accentContentColor,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
         if (canEdit) {
             Box(
                 modifier = Modifier
