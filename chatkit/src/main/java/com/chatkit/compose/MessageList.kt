@@ -42,7 +42,7 @@ import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -231,22 +231,27 @@ internal fun MessageList(
                     detectTapGestures(onTap = { onTranscriptTap() })
                 },
             contentPadding = PaddingValues(
-                start = 16.dp,
-                end = 16.dp,
+                start = 0.dp,
+                end = 0.dp,
                 top = 16.dp,
                 bottom = 12.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
+            verticalArrangement = Arrangement.Bottom,
         ) {
-            items(
+            itemsIndexed(
                 items = invertedItems,
-                key = { it.stableKey() },
-            ) { item ->
+                key = { _, item -> item.stableKey() },
+            ) { index, item ->
                 AnimatedListRow {
                     when (item) {
                         is TranscriptItem.DaySeparator -> DateSeparator(item.label, theme)
                         is TranscriptItem.Message -> MessageBubble(
                             message = item.message,
+                            rowVerticalInset = messageRowVerticalInset(
+                                items = invertedItems,
+                                index = index,
+                                message = item.message,
+                            ),
                             showsSender = showsSender,
                             theme = theme,
                             onRetry = { onMessageRetry(item.message.id) },
@@ -284,6 +289,18 @@ internal fun MessageList(
             )
         }
     }
+}
+
+private fun messageRowVerticalInset(
+    items: List<TranscriptItem>,
+    index: Int,
+    message: ChatMessage,
+): Dp {
+    val hasDirectionChange = listOf(index - 1, index + 1).any { neighborIndex ->
+        val neighbor = items.getOrNull(neighborIndex) as? TranscriptItem.Message
+        neighbor != null && neighbor.message.direction != message.direction
+    }
+    return if (hasDirectionChange) 10.dp else 2.dp
 }
 
 private fun TranscriptItem.stableKey(): String = when (this) {
@@ -355,6 +372,7 @@ internal fun UnreadJumpButton(
 @Composable
 internal fun MessageBubble(
     message: ChatMessage,
+    rowVerticalInset: Dp = 2.dp,
     showsSender: Boolean,
     theme: ChatTheme,
     onRetry: () -> Unit,
@@ -547,7 +565,8 @@ internal fun MessageBubble(
                 .background(if (isSelected) theme.accentColor.copy(alpha = 0.12f) else Color.Transparent)
                 .offset { IntOffset(swipeOffset.roundToInt(), 0) }
                 .then(swipeModifier)
-                .then(rowGestureModifier),
+                .then(rowGestureModifier)
+                .padding(horizontal = 10.dp, vertical = rowVerticalInset),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (isMessageSelectionMode) {
@@ -1220,7 +1239,10 @@ internal fun ReplyAttachmentThumbnail(
 
 @Composable
 internal fun DateSeparator(label: String, theme: ChatTheme) {
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+    Box(
+        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         Text(
             label,
             color = theme.dateSeparatorTextColor,
