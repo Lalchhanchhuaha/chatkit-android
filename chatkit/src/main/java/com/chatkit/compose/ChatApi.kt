@@ -34,7 +34,9 @@ public data class ChatConfig(
     public val showDeliveryStatus: Boolean = false,
     public val enableSwipeToReply: Boolean = true,
     /** Number of rows from the oldest edge at which pagination is requested. */
-    public val loadPreviousThreshold: Int = 5,
+    public val loadPreviousThreshold: Int = 1,
+    /** Minimum initial history size before edge-triggered pagination starts. */
+    public val olderMessagesPageSize: Int = 50,
 )
 
 /** Colors for every visible ChatKit surface. */
@@ -147,6 +149,7 @@ public fun ChatScreen(
         onEditMessage = onEditMessage,
         onDeleteMessage = onDeleteMessage,
         onLoadPreviousMessages = onLoadPreviousMessages,
+        olderMessagesPageSize = config.olderMessagesPageSize.coerceAtLeast(1),
         loadPreviousThreshold = config.loadPreviousThreshold.coerceAtLeast(1),
         swipeToReplyEnabled = config.enableSwipeToReply,
         onReplyToMessage = onReplyToMessage,

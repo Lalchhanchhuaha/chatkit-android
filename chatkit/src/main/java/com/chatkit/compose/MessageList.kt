@@ -62,6 +62,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -69,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -92,10 +94,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 /** Matches iOS UITableView insert cadence (~ease-in-out slide). */
@@ -124,6 +129,7 @@ internal fun MessageList(
     onMessageLongPress: ((ChatMessage) -> Unit)?,
     onMessageSelectionTap: (ChatMessage) -> Unit,
     onLoadPreviousMessages: (() -> Unit)?,
+    olderMessagesPageSize: Int,
     loadPreviousThreshold: Int,
     onUnreadIncomingCountChanged: (Int) -> Unit,
     onNewestVisibilityChanged: (Boolean) -> Unit,
@@ -148,23 +154,31 @@ internal fun MessageList(
     val chronologicalItems = remember(messageSnapshot) { buildTranscriptItems(messageSnapshot) }
     val invertedItems = remember(chronologicalItems) { chronologicalItems.asReversed() }
     var trackedLastId by remember { mutableStateOf(messageSnapshot.lastOrNull()?.id) }
+    var requestedForOldestId by remember { mutableStateOf<String?>(null) }
+    val currentLoadPreviousMessages by rememberUpdatedState(onLoadPreviousMessages)
 
     LaunchedEffect(
         listState,
+        messageSnapshot.firstOrNull()?.id,
         messageSnapshot.size,
-        onLoadPreviousMessages,
+        olderMessagesPageSize,
         loadPreviousThreshold,
     ) {
-        if (onLoadPreviousMessages == null || messageSnapshot.isEmpty()) return@LaunchedEffect
+        val oldestId = messageSnapshot.firstOrNull()?.id ?: return@LaunchedEffect
+        if (currentLoadPreviousMessages == null ||
+            messageSnapshot.size < olderMessagesPageSize ||
+            requestedForOldestId == oldestId
+        ) return@LaunchedEffect
         snapshotFlow {
             val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.maxOfOrNull { it.index } ?: 0
             val triggerIndex = (listState.layoutInfo.totalItemsCount - loadPreviousThreshold)
                 .coerceAtLeast(0)
-            lastVisibleIndex >= triggerIndex
+            listState.isScrollInProgress && lastVisibleIndex >= triggerIndex
         }
             .distinctUntilChanged()
             .first { it }
-        onLoadPreviousMessages()
+        requestedForOldestId = oldestId
+        currentLoadPreviousMessages?.invoke()
     }
 
     LaunchedEffect(listState) {
@@ -379,22 +393,73 @@ internal fun MessageBubble(
     val timestampColor = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor
     val textColor = if (incoming) theme.incomingTextColor else theme.outgoingTextColor
     val density = LocalDensity.current
+    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
     val textMeasurer = rememberTextMeasurer()
-    val selectionTouchModifier = if (!isMessageSelectionMode) {
-        Modifier
-    } else {
-        Modifier.pointerInput(message.id) {
-            awaitEachGesture {
-                val down = awaitFirstDown(
-                    requireUnconsumed = false,
-                    pass = PointerEventPass.Initial,
-                )
+    val currentSelectionMode by rememberUpdatedState(isMessageSelectionMode)
+    val currentLongPress by rememberUpdatedState(onLongPress)
+    val currentSelectionTap by rememberUpdatedState(onSelectionTap)
+    var singleImageBubbleWidth by remember(message.id) { mutableStateOf<Dp?>(null) }
+    val rowGestureModifier = Modifier.pointerInput(message.id) {
+        val allowedMovement = 20.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(
+                requireUnconsumed = false,
+                pass = PointerEventPass.Initial,
+            )
+            val initialPosition = down.position
+
+            if (currentSelectionMode) {
+                // Selection owns the complete row, including attachment buttons and
+                // the transparent space around an outgoing bubble.
                 down.consume()
-                val up = waitForUpOrCancellation(pass = PointerEventPass.Initial)
-                if (up != null) {
-                    up.consume()
-                    onSelectionTap()
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    change.consume()
+                    val delta = change.position - initialPosition
+                    if (hypot(delta.x, delta.y) > allowedMovement) break
+                    if (!change.pressed) {
+                        currentSelectionTap()
+                        break
+                    }
                 }
+                return@awaitEachGesture
+            }
+
+            if (currentLongPress == null) return@awaitEachGesture
+
+            var movedTooFar = false
+            var released = false
+            val endedBeforeDeadline = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id }
+                    if (change == null || !change.pressed) {
+                        released = true
+                        break
+                    }
+                    val delta = change.position - initialPosition
+                    if (hypot(delta.x, delta.y) > allowedMovement) {
+                        movedTooFar = true
+                        break
+                    }
+                }
+                true
+            }
+
+            if (endedBeforeDeadline != null || movedTooFar || released) return@awaitEachGesture
+
+            hapticFeedback.performHapticFeedback(
+                androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress,
+            )
+            currentLongPress?.invoke()
+
+            // Consume the release so a media/document button cannot open after the
+            // long press has already entered selection mode.
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                event.changes.forEach { it.consume() }
+                if (event.changes.none { it.pressed }) break
             }
         }
     }
@@ -451,8 +516,13 @@ internal fun MessageBubble(
         // Visual media always uses the max bubble width so a short caption cannot shrink
         // the photo/video tile (iOS / WhatsApp behavior).
         val hasVisualMedia = message.attachments.any { it.isImage || it.isVideo }
+        val isSingleImageMessage = message.attachments.size == 1 &&
+            message.attachments.first().isImage
         val contentBubbleWidth = when {
-            hasVisualMedia -> maxBubble
+            hasVisualMedia -> maxOf(
+                singleImageBubbleWidth ?: maxBubble,
+                captionLayout?.bubbleWidth ?: ChatBubbleMetrics.MinimumWidth,
+            )
             captionLayout != null -> captionLayout.bubbleWidth
             hasMedia -> maxBubble
             else -> ChatBubbleMetrics.MinimumWidth
@@ -474,18 +544,20 @@ internal fun MessageBubble(
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(if (isSelected) theme.accentColor.copy(alpha = 0.10f) else Color.Transparent)
+                .background(if (isSelected) theme.accentColor.copy(alpha = 0.12f) else Color.Transparent)
                 .offset { IntOffset(swipeOffset.roundToInt(), 0) }
-                .then(swipeModifier),
+                .then(swipeModifier)
+                .then(rowGestureModifier),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // iOS HStack: flexible spacer pushes outgoing trailing / incoming leading.
-            if (!incoming) {
-                Spacer(Modifier.widthIn(min = sideInset).weight(1f))
-            }
             if (isMessageSelectionMode) {
                 MessageSelectionCheckmark(isSelected = isSelected, theme = theme)
                 Spacer(Modifier.width(8.dp))
+            }
+            // Match iOS: the selection check has one stable leading location for
+            // both directions; only the outgoing bubble is pushed to the trailing edge.
+            if (!incoming) {
+                Spacer(Modifier.widthIn(min = sideInset).weight(1f))
             }
             Column(horizontalAlignment = Alignment.Start) {
                 if (showsSender && incoming && !message.senderName.isNullOrBlank()) {
@@ -513,18 +585,14 @@ internal fun MessageBubble(
                                 Modifier
                             },
                         )
-                        .then(selectionTouchModifier)
-                        .pointerInput(message.id, isMessageSelectionMode, onLongPress, onReply) {
+                        .pointerInput(message.id, isMessageSelectionMode, onReply) {
                             detectTapGestures(
                                 onTap = {
-                                    if (isMessageSelectionMode) {
-                                        onSelectionTap()
-                                    } else if (!incoming && message.deliveryStatus == DeliveryStatus.Failed) {
+                                    if (!isMessageSelectionMode &&
+                                        !incoming && message.deliveryStatus == DeliveryStatus.Failed
+                                    ) {
                                         onRetry()
                                     }
-                                },
-                                onLongPress = {
-                                    onLongPress?.invoke()
                                 },
                             )
                         },
@@ -595,6 +663,9 @@ internal fun MessageBubble(
                                 onCancelDownload = onCancelAttachmentDownload,
                                 onRetryAttachment = onRetryAttachmentDownload,
                                 audioPlayer = audioPlayer,
+                                onSingleImageBubbleWidthChanged = { width ->
+                                    if (isSingleImageMessage) singleImageBubbleWidth = width
+                                },
                             )
                         }
                         Column(
@@ -639,13 +710,19 @@ internal fun MessageBubble(
 private fun MessageSelectionCheckmark(isSelected: Boolean, theme: ChatTheme) {
     Box(
         modifier = Modifier
-            .size(24.dp)
+            .size(22.dp)
             .clip(CircleShape)
-            .background(if (isSelected) theme.accentColor else Color.Transparent)
-            .border(
-                width = 2.dp,
-                color = if (isSelected) theme.accentColor else theme.incomingTimestampColor,
-                shape = CircleShape,
+            .background(if (isSelected) Color.White else Color.Transparent)
+            .then(
+                if (isSelected) {
+                    Modifier
+                } else {
+                    Modifier.border(
+                        width = 1.5.dp,
+                        color = theme.accentColor.copy(alpha = 0.65f),
+                        shape = CircleShape,
+                    )
+                },
             ),
         contentAlignment = Alignment.Center,
     ) {
@@ -653,8 +730,8 @@ private fun MessageSelectionCheckmark(isSelected: Boolean, theme: ChatTheme) {
             Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = null,
-                tint = theme.accentContentColor,
-                modifier = Modifier.size(16.dp),
+                tint = theme.accentColor,
+                modifier = Modifier.size(14.dp),
             )
         }
     }
@@ -1062,32 +1139,45 @@ internal fun ReplyAttachmentThumbnail(
     cornerRadius: Dp,
 ) {
     val context = LocalContext.current
+    val preferVideoFrame = attachment.isVideo
     val uri by produceState<android.net.Uri?>(
         attachment.posterUri ?: attachment.localUri,
         attachment.id,
         attachment.posterUri,
         attachment.localUri,
+        attachment.transferState,
         attachmentResolver,
     ) {
-        value = withContext(Dispatchers.IO) {
-            attachment.posterUri
-                ?: runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull()
-                ?: attachment.localUri
-                ?: runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
+        var result: android.net.Uri? = attachment.posterUri ?: attachment.localUri
+        var attempt = 0
+        while (result == null && attempt < 12) {
+            result = withContext(Dispatchers.IO) {
+                runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull()
+                    ?: runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
+            }
+            if (result != null) break
+            attempt += 1
+            delay((750L * attempt).coerceAtMost(5_000L))
         }
+        value = result
     }
-    val bitmap by produceState<android.graphics.Bitmap?>(null, uri, attachment.isVideo) {
+    val bitmap by produceState<ImageBitmap?>(null, uri, attachment.isVideo, attachment.posterUri) {
         value = uri?.let { resolved ->
             withContext(Dispatchers.IO) {
-                decodeAttachmentPreview(
-                    context = context,
-                    uri = resolved,
-                    preferVideo = attachment.isVideo && resolved != attachment.posterUri,
-                    maxSide = 256,
-                )
+                val useVideoFrame = preferVideoFrame && resolved != attachment.posterUri
+                // Reuse the bubble decode cache (1024px) when the media row already rendered.
+                cachedAttachmentPreviewOrNull(resolved, useVideoFrame, maxSide = 1024)
+                    ?: cachedAttachmentPreviewOrNull(resolved, useVideoFrame, maxSide = 256)
+                    ?: decodeAndCacheAttachmentPreview(
+                        context = context,
+                        uri = resolved,
+                        preferVideo = useVideoFrame,
+                        maxSide = 256,
+                    )
             }
         }
     }
+    val placeholderTint = Color(0xFF5F7186)
     Box(
         modifier = Modifier
             .size(size)
@@ -1097,7 +1187,7 @@ internal fun ReplyAttachmentThumbnail(
     ) {
         if (bitmap != null) {
             Image(
-                bitmap = bitmap!!.asImageBitmap(),
+                bitmap = bitmap!!,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
@@ -1106,17 +1196,24 @@ internal fun ReplyAttachmentThumbnail(
             Icon(
                 imageVector = if (attachment.isVideo) Icons.Default.Videocam else Icons.Default.CameraAlt,
                 contentDescription = null,
-                tint = Color.White.copy(alpha = 0.7f),
+                tint = placeholderTint,
                 modifier = Modifier.size(18.dp),
             )
         }
-        if (attachment.isVideo) {
-            Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(20.dp),
-            )
+        if (attachment.isVideo && bitmap != null) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.28f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }

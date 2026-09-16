@@ -99,6 +99,9 @@ import kotlin.math.max
 
 private val MediaTileShape = RoundedCornerShape(8.dp)
 private val SingleMediaHeight = 210.dp
+private val SingleMediaMinimumHeight = 160.dp
+private val SingleMediaMaximumHeight = 320.dp
+private val SinglePortraitMediaMaximumHeight = 340.dp
 private val MediaGridSpacing = 4.dp
 private const val WaveformBarCount = 28
 private val WaveformBarSpacing = 2.dp
@@ -116,7 +119,7 @@ private val AttachmentPreviewCache = object : LruCache<String, ImageBitmap>(
 private fun attachmentPreviewCacheKey(uri: Uri, preferVideo: Boolean, maxSide: Int): String =
     "$uri|$preferVideo|$maxSide"
 
-private fun cachedAttachmentPreviewOrNull(
+internal fun cachedAttachmentPreviewOrNull(
     uri: Uri,
     preferVideo: Boolean,
     maxSide: Int,
@@ -125,7 +128,7 @@ private fun cachedAttachmentPreviewOrNull(
 }
 
 /** Must be called off the main thread: a cache miss performs bitmap/video decoding. */
-private fun decodeAndCacheAttachmentPreview(
+internal fun decodeAndCacheAttachmentPreview(
     context: android.content.Context,
     uri: Uri,
     preferVideo: Boolean,
@@ -221,6 +224,7 @@ internal fun MessageAttachmentsContent(
     onCancelDownload: (ChatAttachment) -> Unit = {},
     onRetryAttachment: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController,
+    onSingleImageBubbleWidthChanged: (Dp?) -> Unit = {},
 ) {
     val images = message.attachments.filter { it.isImage }
     val videos = message.attachments.filter { it.isVideo }
@@ -240,6 +244,7 @@ internal fun MessageAttachmentsContent(
             onCancelUpload = onCancelUpload,
             onCancelDownload = onCancelDownload,
             onRetryAttachment = onRetryAttachment,
+            onSingleImageBubbleWidthChanged = onSingleImageBubbleWidthChanged,
         )
     }
     if (videos.isNotEmpty()) {
@@ -304,8 +309,31 @@ private fun MediaAttachmentGrid(
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit,
     onRetryAttachment: (ChatAttachment) -> Unit,
+    onSingleImageBubbleWidthChanged: (Dp?) -> Unit = {},
 ) {
     var showAlbumGallery by remember { mutableStateOf(false) }
+    var singleImageAspectRatio by remember(attachments.firstOrNull()?.id, isVideo) {
+        mutableStateOf<Float?>(null)
+    }
+    val singleTileSize = if (attachments.size == 1 && !isVideo) {
+        singleImageAspectRatio?.let { aspect ->
+            val safeAspect = aspect.coerceAtLeast(0.05f)
+            if (safeAspect < 0.9f) {
+                val height = minOf(SinglePortraitMediaMaximumHeight, mediaWidth / safeAspect)
+                minOf(mediaWidth, height * safeAspect) to height
+            } else {
+                mediaWidth to minOf(
+                    SingleMediaMaximumHeight,
+                    maxOf(SingleMediaMinimumHeight, mediaWidth / safeAspect),
+                )
+            }
+        }
+    } else {
+        null
+    }
+    LaunchedEffect(singleTileSize, attachments.size, isVideo) {
+        onSingleImageBubbleWidthChanged(singleTileSize?.first?.plus(8.dp))
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -316,8 +344,8 @@ private fun MediaAttachmentGrid(
             MediaAttachmentTile(
                 attachment = attachments.first(),
                 theme = theme,
-                width = mediaWidth,
-                height = SingleMediaHeight,
+                width = singleTileSize?.first ?: mediaWidth,
+                height = singleTileSize?.second ?: SingleMediaHeight,
                 isVideo = isVideo,
                 compact = false,
                 automaticallyLoadsImages = automaticallyLoadsImages,
@@ -325,6 +353,9 @@ private fun MediaAttachmentGrid(
                 onCancelUpload = onCancelUpload,
                 onCancelDownload = onCancelDownload,
                 onRetryAttachment = onRetryAttachment,
+                onPreviewAspectRatio = if (isVideo) null else { ratio ->
+                    singleImageAspectRatio = ratio
+                },
             )
         } else {
             val tileSize = (mediaWidth - MediaGridSpacing) / 2
@@ -660,23 +691,30 @@ private fun MediaAttachmentTile(
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit = {},
     onRetryAttachment: (ChatAttachment) -> Unit = {},
+    onPreviewAspectRatio: ((Float) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var previewImageUri by remember { mutableStateOf<Uri?>(null) }
     var previewVideoUri by remember { mutableStateOf<Uri?>(null) }
     var retryToken by remember(attachment.id) { mutableStateOf(0) }
-    var resolveCancelled by remember(attachment.id, attachment.transferState) {
+    var resolveCancelled by remember(attachment.id, attachment.transferState, attachment.localUri) {
         mutableStateOf(attachment.transferState is TransferState.DownloadFailed)
     }
-    var downloadCancelled by remember(attachment.id, attachment.transferState) {
+    var downloadCancelled by remember(attachment.id, attachment.transferState, attachment.localUri) {
         mutableStateOf(attachment.transferState is TransferState.DownloadFailed)
     }
-    var hasLocalResolvableContent by remember(attachment.id) {
+    var hasLocalResolvableContent by remember(
+        attachment.id,
+        attachment.localUri,
+        attachment.posterUri,
+    ) {
         mutableStateOf(attachment.localUri != null || attachment.posterUri != null)
     }
     var resolveExhausted by remember(attachment.id, retryToken) { mutableStateOf(false) }
     val resolvedUri by produceState<Uri?>(
         attachment.localUri,
+        attachment.posterUri,
+        attachment.transferState,
         attachment.id,
         automaticallyLoadsImages,
         retryToken,
@@ -798,6 +836,12 @@ private fun MediaAttachmentTile(
         } else {
             null
         }
+    }
+    LaunchedEffect(bitmap) {
+        val preview = bitmap ?: return@LaunchedEffect
+        onPreviewAspectRatio?.invoke(
+            preview.width.toFloat() / preview.height.toFloat().coerceAtLeast(1f),
+        )
     }
     val playSize = if (compact) 44.dp else 58.dp
     val playIconSize = if (compact) 26.dp else 34.dp

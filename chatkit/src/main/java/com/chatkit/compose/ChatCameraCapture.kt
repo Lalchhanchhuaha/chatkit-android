@@ -73,6 +73,7 @@ import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Pause
@@ -87,6 +88,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -779,6 +781,40 @@ private fun ReviewScreen(
 ) {
     val context = LocalContext.current
     val sendEnabled = !viewModel.submitInFlight
+    var isCropping by remember(capture.id) { mutableStateOf(false) }
+    var cropRevision by remember(capture.id) { mutableIntStateOf(0) }
+    val photoBitmap by produceState<android.graphics.Bitmap?>(
+        null,
+        capture.localFile,
+        cropRevision,
+    ) {
+        value = if (capture.mediaType == MediaType.Photo) {
+            withContext(Dispatchers.IO) {
+                decodeBitmapRespectingExif(
+                    context,
+                    capture.localFile.toUri(),
+                    maxSide = 4096,
+                )
+            }
+        } else {
+            null
+        }
+    }
+
+    if (isCropping && photoBitmap != null) {
+        BackHandler { isCropping = false }
+        PhotoCropEditor(
+            source = photoBitmap!!,
+            destination = capture.localFile,
+            accentColor = theme.accentColor,
+            onCancel = { isCropping = false },
+            onSaved = {
+                cropRevision += 1
+                isCropping = false
+            },
+        )
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -809,6 +845,24 @@ private fun ReviewScreen(
                     modifier = Modifier.size(22.dp),
                 )
             }
+            Spacer(Modifier.weight(1f))
+            if (capture.mediaType == MediaType.Photo) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .clickable(enabled = photoBitmap != null) { isCropping = true }
+                        .semantics { contentDescription = "Crop photo" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Crop,
+                        contentDescription = null,
+                        tint = if (photoBitmap != null) Color.White else Color.White.copy(alpha = 0.35f),
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
         }
 
         Box(
@@ -830,16 +884,7 @@ private fun ReviewScreen(
         ) {
             when (capture.mediaType) {
                 MediaType.Photo -> {
-                    val bitmap by produceState<android.graphics.Bitmap?>(null, capture.localFile) {
-                        value = withContext(Dispatchers.IO) {
-                            decodeBitmapRespectingExif(
-                                context,
-                                capture.localFile.toUri(),
-                                maxSide = 2048,
-                            )
-                        }
-                    }
-                    bitmap?.let {
+                    photoBitmap?.let {
                         Image(
                             bitmap = it.asImageBitmap(),
                             contentDescription = "Captured photo",

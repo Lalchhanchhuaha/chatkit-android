@@ -8,11 +8,12 @@ networking, persistence, uploads, delivery state, pagination, and retry policy.
 
 - Incoming/outgoing text and attachment bubbles, date separators, receipts, typing, and unread count
 - Multiline composer with atomic `ChatDraft` submission
-- Android Photo Picker, document picker, and full-screen CameraX capture with review/caption/trim
+- Android Photo Picker, document picker, and full-screen CameraX capture with review, photo crop/rotate, caption, and video trim
 - Optimistic media, document, and voice rows reconciled by stable message ID
 - Hold/slide-to-cancel/slide-up-to-lock voice recording and conversation-scoped audio playback
 - Retry, edit, delete, upload cancellation, host attachment resolution, and configurable theming
 - Swipe-to-reply with composer quote preview and reply metadata on submitted drafts
+- Edge-triggered older-message pagination with duplicate-request protection and portrait-aware image bubbles
 - IME/navigation-bar insets, stable lazy-list keys, RTL-compatible layout, and TalkBack semantics
 
 ## Install from GitHub
@@ -39,11 +40,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.8")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.9")
 }
 ```
 
-For development snapshots, replace `v1.6.8` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.9` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -120,13 +121,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.8`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.9`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.9 | Camera photo crop/rotate editor; portrait-aware image bubbles; edge-triggered older-message pagination |
 | 1.6.8 | WhatsApp-style message selection/edit/delete; rich reply previews; attachment preview cache; camera lifecycle fixes |
 | 1.6.7 | In-app full-screen video player; media album gallery; `onRetryAttachmentDownload`; camera trim/review polish |
 | 1.6.6 | Attachment upload/download cancel (X) and retry; image poster fallback; `onCancelAttachmentDownload` |

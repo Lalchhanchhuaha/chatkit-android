@@ -95,6 +95,26 @@ class VideoTrimRangeTest {
     }
 }
 
+class PhotoCropTest {
+    @Test
+    fun squareCropCentersInsideLandscapePhoto() {
+        val crop = centeredCropForAspect(1f, bitmapWidth = 4000, bitmapHeight = 3000)
+        assertEquals(0.125f, crop.left, 1e-6f)
+        assertEquals(0.875f, crop.right, 1e-6f)
+        assertEquals(0f, crop.top, 1e-6f)
+        assertEquals(1f, crop.bottom, 1e-6f)
+    }
+
+    @Test
+    fun landscapeCropCentersInsidePortraitPhoto() {
+        val crop = centeredCropForAspect(4f / 3f, bitmapWidth = 3000, bitmapHeight = 4000)
+        assertEquals(0f, crop.left, 1e-6f)
+        assertEquals(1f, crop.right, 1e-6f)
+        assertEquals(0.21875f, crop.top, 1e-6f)
+        assertEquals(0.78125f, crop.bottom, 1e-6f)
+    }
+}
+
 class VideoFrameOrientationTest {
     @Test
     fun appliesRotationWhenFrameStillMatchesCodedLandscape() {
