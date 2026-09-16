@@ -50,6 +50,23 @@ internal object ChatCameraFiles {
         }
     }
 
+    /**
+     * Makes the stored JPEG match the iOS 4:3 landscape / 3:4 portrait capture frame.
+     * CameraX can expose a viewport crop without physically applying it to every
+     * device's on-disk JPEG, so normalize orientation and crop the pixels explicitly.
+     */
+    fun normalizePhotoToCaptureAspect(context: Context, file: File): Boolean {
+        val bitmap = decodeBitmapRespectingExif(context, file.toUri(), maxSide = 4096)
+            ?: return false
+        return try {
+            val targetAspect = if (bitmap.width >= bitmap.height) 4f / 3f else 3f / 4f
+            val crop = centeredCropForAspect(targetAspect, bitmap.width, bitmap.height)
+            saveCroppedPhoto(bitmap, crop, file)
+        } finally {
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+
     fun toMediaAttachment(
         capture: CapturedMedia,
         trimmedFile: File? = null,

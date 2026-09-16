@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import android.graphics.Rect as AndroidRect
+import android.util.Rational
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewGroup
@@ -23,6 +24,7 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -99,6 +101,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -399,8 +402,10 @@ private fun LiveCameraScreen(
                 CameraSelector.DEFAULT_BACK_CAMERA
             }
             val photoMode = viewModel.captureMode == CaptureMode.PHOTO
-            // Match iOS: 4:3 photo / 16:9 video use cases (portrait viewfinder is 3:4 / 9:16).
-            val sensorAspect = if (photoMode) AspectRatio.RATIO_4_3 else AspectRatio.RATIO_16_9
+            // iOS keeps the same 4:3 sensor crop for both modes. Switching the
+            // preview to 16:9 for video changes the field of view and makes the
+            // mode toggle visibly jump.
+            val sensorAspect = AspectRatio.RATIO_4_3
             val rotation = preview.display?.rotation
                 ?: android.view.Surface.ROTATION_0
             val resolutionSelector = ResolutionSelector.Builder()
@@ -417,9 +422,16 @@ private fun LiveCameraScreen(
                 .build()
                 .also { it.surfaceProvider = preview.surfaceProvider }
 
-            val groupBuilder = UseCaseGroup.Builder().addUseCase(previewUseCase)
-            // Share PreviewView's viewport so capture is cropped to exactly what is shown.
-            preview.viewPort?.let(groupBuilder::setViewPort)
+            val groupBuilder = UseCaseGroup.Builder()
+                .addUseCase(previewUseCase)
+                // Do not depend on PreviewView.viewPort being ready during the first
+                // bind. An explicit portrait 3:4 viewport keeps preview and capture
+                // geometry identical from the first frame.
+                .setViewPort(
+                    ViewPort.Builder(Rational(3, 4), rotation)
+                        .setScaleType(ViewPort.FILL_CENTER)
+                        .build(),
+                )
 
             if (photoMode) {
                 val image = ImageCapture.Builder()
@@ -453,6 +465,10 @@ private fun LiveCameraScreen(
             )
             camera = bound
             torchSupported = bound.cameraInfo.hasFlashUnit()
+            if (!torchSupported) {
+                viewModel.disableFlash()
+                runCatching { bound.cameraControl.enableTorch(false) }
+            }
             val zoomState = bound.cameraInfo.zoomState.value
             minZoom = zoomState?.minZoomRatio ?: 1f
             maxZoom = (zoomState?.maxZoomRatio ?: 1f).coerceAtMost(8f)
@@ -494,21 +510,20 @@ private fun LiveCameraScreen(
         }
     }
 
-    val photoMode = viewModel.captureMode == CaptureMode.PHOTO
-    // Portrait viewfinder ratios matching iOS ChatKit (sensor 4:3 / 16:9).
-    val viewfinderAspectRatio = if (photoMode) 3f / 4f else 9f / 16f
+    // iOS uses one WhatsApp-style 3:4 portrait viewfinder in both modes.
+    val viewfinderAspectRatio = 3f / 4f
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .statusBarsPadding()
-            .navigationBarsPadding(),
+            .background(Color.Black),
     ) {
         Row(
             modifier = Modifier
+                .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .statusBarsPadding()
+                .padding(start = 18.dp, end = 18.dp, top = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CameraChromeButton(
@@ -521,43 +536,39 @@ private fun LiveCameraScreen(
                 Icon(Icons.Default.Close, contentDescription = null, tint = Color.White)
             }
             Spacer(Modifier.weight(1f))
-            if (torchSupported) {
-                CameraChromeButton(
-                    contentDescription = if (viewModel.flashEnabled) "Flash on" else "Flash off",
-                    onClick = {
-                        viewModel.toggleFlash()
-                        val cam = camera
-                        if (viewModel.isRecording && cam != null && cam.cameraInfo.hasFlashUnit()) {
-                            runCatching {
-                                cam.cameraControl.enableTorch(viewModel.flashEnabled)
-                            }
-                        }
-                    },
-                ) {
-                    Icon(
-                        if (viewModel.flashEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
-                        contentDescription = null,
-                        tint = Color.White,
-                    )
-                }
-            }
-            Spacer(Modifier.width(8.dp))
             CameraChromeButton(
-                contentDescription = "Flip camera",
+                contentDescription = if (torchSupported) {
+                    if (viewModel.flashEnabled) "Flash on" else "Flash off"
+                } else {
+                    "Flash unavailable"
+                },
+                enabled = torchSupported,
                 onClick = {
-                    if (!rebinding && !viewModel.isRecording) {
-                        viewModel.toggleLensFacing()
+                    viewModel.toggleFlash()
+                    val cam = camera
+                    if (viewModel.isRecording && cam != null && cam.cameraInfo.hasFlashUnit()) {
+                        runCatching {
+                            cam.cameraControl.enableTorch(viewModel.flashEnabled)
+                        }
                     }
                 },
             ) {
-                Icon(Icons.Default.Cameraswitch, contentDescription = null, tint = Color.White)
+                Icon(
+                    if (viewModel.flashEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
+                    contentDescription = null,
+                    tint = if (viewModel.flashEnabled) Color(0xFFFFD60A) else Color.White,
+                )
             }
         }
 
         Box(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(top = 64.dp)
+                .aspectRatio(viewfinderAspectRatio)
+                .clip(RoundedCornerShape(28.dp)),
             contentAlignment = Alignment.Center,
         ) {
             AndroidView(
@@ -567,11 +578,11 @@ private fun LiveCameraScreen(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT,
                         )
-                        // Container is already 3:4 / 9:16; FILL + shared ViewPort makes
+                        // Container is 3:4 in both modes; FILL + shared ViewPort makes
                         // the JPEG/MP4 match the visible viewfinder.
                         scaleType = PreviewView.ScaleType.FILL_CENTER
-                        // SurfaceView avoids the extra GPU copy used by TextureView.
-                        implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                        // TextureView respects the rounded iOS-style viewfinder mask.
+                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                         val scaleDetector = ScaleGestureDetector(
                             ctx,
                             object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -601,20 +612,23 @@ private fun LiveCameraScreen(
                     }
                 },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(viewfinderAspectRatio)
+                    .fillMaxSize()
                     .semantics { contentDescription = "Camera viewfinder" },
             )
+        }
 
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 174.dp)
+                .height(44.dp),
+            contentAlignment = Alignment.Center,
+        ) {
             if (hasUltraWide && !viewModel.lensFacingFront) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     LensChip(
-                        label = "0.5×",
+                        label = "0.5",
                         selected = currentZoom <= 0.7f,
                         onClick = {
                             camera?.let {
@@ -640,8 +654,9 @@ private fun LiveCameraScreen(
         if (showsVideoAttachments) {
             Row(
                 modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .padding(top = 12.dp)
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 8.dp)
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color.White.copy(alpha = 0.12f))
                     .padding(4.dp),
@@ -673,8 +688,10 @@ private fun LiveCameraScreen(
 
         Box(
             modifier = Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(top = 16.dp, bottom = 28.dp),
+                .navigationBarsPadding()
+                .padding(bottom = 74.dp),
             contentAlignment = Alignment.Center,
         ) {
             ShutterButton(
@@ -700,6 +717,10 @@ private fun LiveCameraScreen(
                                     override fun onImageSaved(
                                         outputFileResults: ImageCapture.OutputFileResults,
                                     ) {
+                                        // CameraX crop metadata is device-dependent for an
+                                        // on-disk JPEG. Normalize pixels explicitly, as iOS
+                                        // does, so review/upload dimensions are truly 3:4.
+                                        ChatCameraFiles.normalizePhotoToCaptureAspect(context, file)
                                         scope.launch(Dispatchers.Main) {
                                             viewModel.onPhotoCaptured(id, file)
                                             runCatching { cameraProvider?.unbindAll() }
@@ -766,6 +787,36 @@ private fun LiveCameraScreen(
                         }
                     }
                 },
+            )
+            CameraChromeButton(
+                contentDescription = if (viewModel.lensFacingFront) {
+                    "Switch to rear camera"
+                } else {
+                    "Switch to front camera"
+                },
+                enabled = !rebinding && !viewModel.isRecording,
+                onClick = { viewModel.toggleLensFacing() },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 28.dp),
+            ) {
+                Icon(Icons.Default.Cameraswitch, contentDescription = null, tint = Color.White)
+            }
+        }
+
+        if (viewModel.isRecording) {
+            Text(
+                text = "REC",
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 18.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.Red)
+                    .padding(horizontal = 10.dp, vertical = 3.dp),
             )
         }
     }
@@ -1037,7 +1088,7 @@ private fun VideoReviewPlayer(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(9f / 16f),
+                    .aspectRatio(3f / 4f),
             ) {
                 AndroidView(
                     factory = { ctx ->
@@ -1497,19 +1548,22 @@ private fun ShutterButton(
 @Composable
 private fun CameraChromeButton(
     contentDescription: String,
+    enabled: Boolean = true,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(48.dp)
+            .alpha(if (enabled) 1f else 0.35f)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.35f))
             .semantics {
                 role = Role.Button
                 this.contentDescription = contentDescription
             }
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         content()

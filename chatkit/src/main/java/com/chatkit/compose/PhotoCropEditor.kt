@@ -9,15 +9,28 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.RotateRight
+import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,6 +43,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -38,7 +52,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,16 +75,36 @@ internal data class NormalizedCrop(
     val height: Float get() = bottom - top
 }
 
-private enum class CropDragTarget { Move, TopLeft, TopRight, BottomLeft, BottomRight }
+private enum class CropDragTarget {
+    Move, TopLeft, Top, TopRight, Right, BottomRight, Bottom, BottomLeft, Left,
+}
 
-private data class CropAspect(val label: String, val ratio: Float?)
+private enum class CropAspectKind { Freeform, Original, Square, FourThree, SixteenNine }
 
-private val CropAspects = listOf(
-    CropAspect("Free", null),
-    CropAspect("1:1", 1f),
-    CropAspect("4:3", 4f / 3f),
-    CropAspect("16:9", 16f / 9f),
-)
+private data class CropAspect(val kind: CropAspectKind, val label: String, val ratio: Float?)
+
+private fun cropAspects(bitmap: Bitmap): List<CropAspect> {
+    val portrait = bitmap.height >= bitmap.width
+    return listOf(
+        CropAspect(CropAspectKind.Freeform, "Freeform", null),
+        CropAspect(
+            CropAspectKind.Original,
+            "Original",
+            bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1),
+        ),
+        CropAspect(CropAspectKind.Square, "Square", 1f),
+        CropAspect(
+            CropAspectKind.FourThree,
+            if (portrait) "3:4" else "4:3",
+            if (portrait) 3f / 4f else 4f / 3f,
+        ),
+        CropAspect(
+            CropAspectKind.SixteenNine,
+            if (portrait) "9:16" else "16:9",
+            if (portrait) 9f / 16f else 16f / 9f,
+        ),
+    )
+}
 
 @Composable
 internal fun PhotoCropEditor(
@@ -77,24 +115,60 @@ internal fun PhotoCropEditor(
     onSaved: () -> Unit,
 ) {
     var bitmap by remember(source) { mutableStateOf(source) }
-    var crop by remember(bitmap) { mutableStateOf(NormalizedCrop(0f, 0f, 1f, 1f)) }
-    var selectedAspect by remember { mutableStateOf(CropAspects.first()) }
+    var crop by remember(source) { mutableStateOf(NormalizedCrop(0f, 0f, 1f, 1f)) }
+    var selectedAspectKind by remember { mutableStateOf(CropAspectKind.Freeform) }
+    var aspectMenuExpanded by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val aspects = cropAspects(bitmap)
+    val selectedAspect = aspects.first { it.kind == selectedAspectKind }
+    val headerButtonColors = ButtonDefaults.textButtonColors(
+        contentColor = Color.White,
+        disabledContentColor = Color.White.copy(alpha = 0.55f),
+    )
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black),
     ) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = "Crop photo",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
+        CropOverlay(
+            bitmapWidth = bitmap.width,
+            bitmapHeight = bitmap.height,
+            crop = crop,
+            aspectRatio = selectedAspect.ratio,
+            onCropChanged = { crop = it },
+            modifier = Modifier.fillMaxSize(),
+        )
+
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                // safeDrawing includes both the status bar and display cutout. The
+                // dialog is edge-to-edge, so statusBarsPadding alone is insufficient
+                // on devices whose cutout inset is taller than the status bar.
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                .padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(enabled = !saving, onClick = onCancel) { Text("Cancel", color = Color.White) }
+            TextButton(
+                enabled = !saving,
+                onClick = onCancel,
+                colors = headerButtonColors,
+            ) {
+                Text("Cancel", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            }
             Spacer(Modifier.weight(1f))
             TextButton(
                 enabled = !saving,
+                colors = headerButtonColors,
                 onClick = {
                     saving = true
                     scope.launch {
@@ -105,69 +179,106 @@ internal fun PhotoCropEditor(
                         if (saved) onSaved()
                     }
                 },
-            ) { Text("Done", color = accentColor) }
-        }
-
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = "Crop photo",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-            )
-            CropOverlay(
-                bitmapWidth = bitmap.width,
-                bitmapHeight = bitmap.height,
-                crop = crop,
-                aspectRatio = selectedAspect.ratio,
-                onCropChanged = { crop = it },
-                modifier = Modifier.fillMaxSize(),
-            )
-            if (saving) {
-                Box(
-                    Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = accentColor)
-                }
+            ) {
+                Text("Done", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             }
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(start = 28.dp, end = 28.dp, bottom = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
+            CropRoundButton(
+                contentDescription = "Rotate clockwise",
                 enabled = !saving,
                 onClick = {
                     bitmap = rotateBitmapClockwise(bitmap)
+                    val rotatedAspect = cropAspects(bitmap).first { it.kind == selectedAspectKind }
+                    crop = rotatedAspect.ratio?.let {
+                        centeredCropForAspect(it, bitmap.width, bitmap.height)
+                    } ?: NormalizedCrop(0f, 0f, 1f, 1f)
+                },
+            ) {
+                Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = null, tint = Color.White)
+            }
+
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    bitmap = source
+                    selectedAspectKind = CropAspectKind.Freeform
                     crop = NormalizedCrop(0f, 0f, 1f, 1f)
                 },
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.RotateRight,
-                    contentDescription = "Rotate clockwise",
-                    tint = Color.White,
-                )
+                Text("Reset", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             }
-            CropAspects.forEach { choice ->
-                TextButton(
+
+            Box {
+                CropRoundButton(
+                    contentDescription = "Crop aspect ratio",
                     enabled = !saving,
-                    onClick = {
-                        selectedAspect = choice
-                        crop = choice.ratio?.let {
-                            centeredCropForAspect(it, bitmap.width, bitmap.height)
-                        } ?: NormalizedCrop(0f, 0f, 1f, 1f)
-                    },
+                    onClick = { aspectMenuExpanded = true },
                 ) {
-                    Text(
-                        choice.label,
-                        color = if (choice == selectedAspect) accentColor else Color.White,
-                    )
+                    Icon(Icons.Default.AspectRatio, contentDescription = null, tint = Color.White)
+                }
+                DropdownMenu(
+                    expanded = aspectMenuExpanded,
+                    onDismissRequest = { aspectMenuExpanded = false },
+                ) {
+                    aspects.forEach { choice ->
+                        DropdownMenuItem(
+                            text = { Text(choice.label) },
+                            trailingIcon = if (choice.kind == selectedAspectKind) {
+                                { Icon(Icons.Default.Check, contentDescription = null) }
+                            } else {
+                                null
+                            },
+                            onClick = {
+                                selectedAspectKind = choice.kind
+                                crop = choice.ratio?.let {
+                                    centeredCropForAspect(it, bitmap.width, bitmap.height)
+                                } ?: NormalizedCrop(0f, 0f, 1f, 1f)
+                                aspectMenuExpanded = false
+                            },
+                        )
+                    }
                 }
             }
         }
+
+        if (saving) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = accentColor)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CropRoundButton(
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.48f))
+            .semantics { this.contentDescription = contentDescription }
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
     }
 }
 
@@ -238,12 +349,23 @@ private fun CropOverlay(
                 0.7.dp.toPx(),
             )
         }
-        val handle = 18.dp.toPx()
-        listOf(rect.topLeft, Offset(rect.right, rect.top), Offset(rect.left, rect.bottom), rect.bottomRight)
-            .forEach { point ->
-                drawLine(Color.White, Offset(point.x - handle / 2, point.y), Offset(point.x + handle / 2, point.y), 3.dp.toPx())
-                drawLine(Color.White, Offset(point.x, point.y - handle / 2), Offset(point.x, point.y + handle / 2), 3.dp.toPx())
-            }
+        val handle = 22.dp.toPx()
+        val stroke = 3.dp.toPx()
+        val corners = listOf(
+            Triple(rect.topLeft, 1f, 1f),
+            Triple(Offset(rect.right, rect.top), -1f, 1f),
+            Triple(Offset(rect.left, rect.bottom), 1f, -1f),
+            Triple(rect.bottomRight, -1f, -1f),
+        )
+        corners.forEach { (point, horizontalSign, verticalSign) ->
+            drawLine(Color.White, point, Offset(point.x + horizontalSign * handle, point.y), stroke)
+            drawLine(Color.White, point, Offset(point.x, point.y + verticalSign * handle), stroke)
+        }
+        val edgeHandle = 16.dp.toPx()
+        drawLine(Color.White, Offset(rect.center.x - edgeHandle, rect.top), Offset(rect.center.x + edgeHandle, rect.top), stroke)
+        drawLine(Color.White, Offset(rect.center.x - edgeHandle, rect.bottom), Offset(rect.center.x + edgeHandle, rect.bottom), stroke)
+        drawLine(Color.White, Offset(rect.left, rect.center.y - edgeHandle), Offset(rect.left, rect.center.y + edgeHandle), stroke)
+        drawLine(Color.White, Offset(rect.right, rect.center.y - edgeHandle), Offset(rect.right, rect.center.y + edgeHandle), stroke)
     }
 }
 
@@ -279,6 +401,15 @@ private fun cropDragTarget(point: Offset, crop: NormalizedCrop, bounds: Rect): C
     )
     corners.firstOrNull { (_, corner) -> abs(point.x - corner.x) <= hit && abs(point.y - corner.y) <= hit }
         ?.let { return it.first }
+    val edgeHit = 28f
+    if (point.x in (rect.left - edgeHit)..(rect.right + edgeHit)) {
+        if (abs(point.y - rect.top) <= edgeHit) return CropDragTarget.Top
+        if (abs(point.y - rect.bottom) <= edgeHit) return CropDragTarget.Bottom
+    }
+    if (point.y in (rect.top - edgeHit)..(rect.bottom + edgeHit)) {
+        if (abs(point.x - rect.left) <= edgeHit) return CropDragTarget.Left
+        if (abs(point.x - rect.right) <= edgeHit) return CropDragTarget.Right
+    }
     return if (rect.contains(point)) CropDragTarget.Move else null
 }
 
@@ -298,21 +429,59 @@ private fun moveCrop(
         return NormalizedCrop(left, top, left + start.width, top + start.height)
     }
 
-    var left = if (target == CropDragTarget.TopLeft || target == CropDragTarget.BottomLeft) {
+    var left = if (
+        target == CropDragTarget.TopLeft || target == CropDragTarget.BottomLeft ||
+        target == CropDragTarget.Left
+    ) {
         (start.left + dx).coerceIn(0f, start.right - minimum)
     } else start.left
-    var right = if (target == CropDragTarget.TopRight || target == CropDragTarget.BottomRight) {
+    var right = if (
+        target == CropDragTarget.TopRight || target == CropDragTarget.BottomRight ||
+        target == CropDragTarget.Right
+    ) {
         (start.right + dx).coerceIn(start.left + minimum, 1f)
     } else start.right
-    var top = if (target == CropDragTarget.TopLeft || target == CropDragTarget.TopRight) {
+    var top = if (
+        target == CropDragTarget.TopLeft || target == CropDragTarget.TopRight ||
+        target == CropDragTarget.Top
+    ) {
         (start.top + dy).coerceIn(0f, start.bottom - minimum)
     } else start.top
-    var bottom = if (target == CropDragTarget.BottomLeft || target == CropDragTarget.BottomRight) {
+    var bottom = if (
+        target == CropDragTarget.BottomLeft || target == CropDragTarget.BottomRight ||
+        target == CropDragTarget.Bottom
+    ) {
         (start.bottom + dy).coerceIn(start.top + minimum, 1f)
     } else start.bottom
 
     if (requestedAspect != null) {
         val normalizedRatio = requestedAspect * bitmapHeight.coerceAtLeast(1) / bitmapWidth.coerceAtLeast(1)
+        if (target == CropDragTarget.Top || target == CropDragTarget.Bottom) {
+            var height = bottom - top
+            var width = height * normalizedRatio
+            if (width > 1f) {
+                width = 1f
+                height = width / normalizedRatio
+                if (target == CropDragTarget.Top) top = bottom - height else bottom = top + height
+            }
+            val centerX = (start.left + start.right) / 2f
+            left = (centerX - width / 2f).coerceIn(0f, 1f - width)
+            right = left + width
+            return NormalizedCrop(left, top, right, bottom)
+        }
+        if (target == CropDragTarget.Left || target == CropDragTarget.Right) {
+            var width = right - left
+            var height = width / normalizedRatio
+            if (height > 1f) {
+                height = 1f
+                width = height * normalizedRatio
+                if (target == CropDragTarget.Left) left = right - width else right = left + width
+            }
+            val centerY = (start.top + start.bottom) / 2f
+            top = (centerY - height / 2f).coerceIn(0f, 1f - height)
+            bottom = top + height
+            return NormalizedCrop(left, top, right, bottom)
+        }
         val width = right - left
         val height = width / normalizedRatio
         if (target == CropDragTarget.TopLeft || target == CropDragTarget.TopRight) {

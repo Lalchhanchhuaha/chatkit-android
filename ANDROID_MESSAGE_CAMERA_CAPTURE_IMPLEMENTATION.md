@@ -83,8 +83,9 @@ Bind and unbind CameraX use cases with the destination lifecycle. Serialize
 mode changes and camera flips so a second request cannot run while rebinding is
 in progress. Stop recording before unbinding.
 
-Use a 4:3 photo viewfinder and a 16:9 video viewfinder. The preview may use
-center-crop, but captured media shown during review must use aspect-fit so it is
+Use the same 4:3 sensor crop for photo and video, displayed as a 3:4 viewfinder in
+portrait, matching iOS ChatKit without a field-of-view jump when switching modes.
+The preview may use center-crop, but captured media shown during review must use aspect-fit so it is
 not silently cropped.
 
 ## Attachment and submission contract

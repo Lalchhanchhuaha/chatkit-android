@@ -119,6 +119,10 @@ internal class ChatCameraViewModel(
         flashEnabled = !flashEnabled
     }
 
+    fun disableFlash() {
+        flashEnabled = false
+    }
+
     fun toggleLensFacing() {
         lensFacingFront = !lensFacingFront
     }
