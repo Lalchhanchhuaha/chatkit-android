@@ -69,6 +69,8 @@ public data class ChatAttachment(
     public val localUri: Uri? = null,
     public val posterUri: Uri? = null,
     public val transferState: TransferState = TransferState.Uploaded,
+    /** Upright media width / height. Lets the host reserve the final tile size before decode. */
+    public val aspectRatio: Float? = null,
 ) {
     /** True when MIME metadata or, as a fallback, the extension describes an image. */
     public val isImage: Boolean get() = attachmentKind() == AttachmentKind.Image

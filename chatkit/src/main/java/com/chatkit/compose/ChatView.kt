@@ -305,7 +305,10 @@ public fun ChatView(
     }
 
     fun toggleMessageSelection(message: ChatMessage) {
-        if (!isMessageSelectionMode || !canSelectMessage(message)) return
+        // This callback can be retained by a stable LazyColumn row from before
+        // the first long press. Do not gate it on the captured selection-mode
+        // Boolean; the full-row selection surface is only composed while active.
+        if (!canSelectMessage(message)) return
         selectedMessageIds = if (message.id in selectedMessageIds) {
             selectedMessageIds - message.id
         } else {

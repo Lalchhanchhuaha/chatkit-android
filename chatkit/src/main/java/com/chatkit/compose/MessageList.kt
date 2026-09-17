@@ -487,7 +487,6 @@ internal fun MessageBubble(
     val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
     val textMeasurer = rememberTextMeasurer()
     val currentLongPress by rememberUpdatedState(onLongPress)
-    var singleImageBubbleWidth by remember(message.id) { mutableStateOf<Dp?>(null) }
     val rowGestureModifier = Modifier.pointerInput(message.id) {
         val allowedMovement = 20.dp.toPx()
         awaitEachGesture {
@@ -589,6 +588,22 @@ internal fun MessageBubble(
         val hasVisualMedia = message.attachments.any { it.isImage || it.isVideo }
         val isSingleImageMessage = message.attachments.size == 1 &&
             message.attachments.first().isImage
+        val singleImageBubbleWidth = if (isSingleImageMessage) {
+            message.attachments.first().aspectRatio
+                ?.takeIf { it.isFinite() && it > 0f }
+                ?.let { aspect ->
+                    val mediaWidth = (maxBubble - 8.dp).coerceAtLeast(72.dp)
+                    val safeAspect = aspect.coerceAtLeast(0.05f)
+                    if (safeAspect < 0.9f) {
+                        val height = minOf(340.dp, mediaWidth / safeAspect)
+                        minOf(mediaWidth, height * safeAspect) + 8.dp
+                    } else {
+                        maxBubble
+                    }
+                }
+        } else {
+            null
+        }
         val contentBubbleWidth = when {
             hasVisualMedia -> maxOf(
                 singleImageBubbleWidth ?: maxBubble,
@@ -735,9 +750,7 @@ internal fun MessageBubble(
                                 onCancelDownload = onCancelAttachmentDownload,
                                 onRetryAttachment = onRetryAttachmentDownload,
                                 audioPlayer = audioPlayer,
-                                onSingleImageBubbleWidthChanged = { width ->
-                                    if (isSingleImageMessage) singleImageBubbleWidth = width
-                                },
+                                onSingleImageBubbleWidthChanged = {},
                             )
                         }
                         Column(

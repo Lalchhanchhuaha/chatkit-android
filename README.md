@@ -40,11 +40,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.15")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.16")
 }
 ```
 
-For development snapshots, replace `v1.6.15` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.16` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -128,13 +128,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.15`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.16`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.16 | Host `aspectRatio` reserves media tile size; sync poster decode; selection tap fix |
 | 1.6.15 | Fix Compose 1.10 `matchParentSize` build; camera permission/rebind polish; selection allows reply/delete on media |
 | 1.6.14 | Skip row animation on initial chat load; selection overlay owns row taps; fix crop-handle drag deltas |
 | 1.6.13 | `conversationId` isolates scroll/composer state; smarter auto-scroll and jump-to-newest; crop handle gesture exclusion |

@@ -312,10 +312,12 @@ private fun MediaAttachmentGrid(
     onSingleImageBubbleWidthChanged: (Dp?) -> Unit = {},
 ) {
     var showAlbumGallery by remember { mutableStateOf(false) }
-    var singleImageAspectRatio by remember(attachments.firstOrNull()?.id, isVideo) {
-        mutableStateOf<Float?>(null)
-    }
-    val singleTileSize = if (attachments.size == 1 && !isVideo) {
+    // Layout metadata is immutable for the lifetime of a row. Never derive the tile
+    // size from an asynchronously decoded bitmap: doing so visibly resizes the bubble.
+    val singleImageAspectRatio = attachments.firstOrNull()
+        ?.aspectRatio
+        ?.takeIf { it.isFinite() && it > 0f }
+    val singleTileSize = if (attachments.size == 1) {
         singleImageAspectRatio?.let { aspect ->
             val safeAspect = aspect.coerceAtLeast(0.05f)
             if (safeAspect < 0.9f) {
@@ -353,9 +355,7 @@ private fun MediaAttachmentGrid(
                 onCancelUpload = onCancelUpload,
                 onCancelDownload = onCancelDownload,
                 onRetryAttachment = onRetryAttachment,
-                onPreviewAspectRatio = if (isVideo) null else { ratio ->
-                    singleImageAspectRatio = ratio
-                },
+                onPreviewAspectRatio = null,
             )
         } else {
             val tileSize = (mediaWidth - MediaGridSpacing) / 2
@@ -598,7 +598,16 @@ private fun MediaAlbumGalleryRow(
                 // Decode only what the gallery tile can display on the first frame.
                 // The sharper 1600px preview is produced below on Dispatchers.IO.
                 maxSide = if (posterUri != null) 384 else 640,
-            )
+            ) ?: posterUri?.let { localPoster ->
+                // Posters are deliberately tiny local JPEGs. Decode one synchronously on
+                // first use so a cached message row never flashes a loading placeholder.
+                decodeAndCacheAttachmentPreview(
+                    context = context,
+                    uri = localPoster,
+                    preferVideo = false,
+                    maxSide = 384,
+                )
+            }
         }
     }
     val bitmap by produceState<ImageBitmap?>(initialBitmap, displayUri, resolvedUri, isVideo) {
@@ -616,9 +625,11 @@ private fun MediaAlbumGalleryRow(
         }
     }
     val canOpen = resolvedUri != null
-    val aspectRatio = bitmap?.let { bmp ->
-        bmp.width.toFloat() / bmp.height.toFloat().coerceAtLeast(1f)
-    }
+    // Reserve one stable row size before decode. Legacy attachments without stored
+    // dimensions use a deterministic fallback rather than changing size later.
+    val aspectRatio = attachment.aspectRatio
+        ?.takeIf { it.isFinite() && it > 0f }
+        ?: if (isVideo) 16f / 9f else 4f / 3f
 
     Box(
         modifier = Modifier
@@ -631,21 +642,21 @@ private fun MediaAlbumGalleryRow(
         contentAlignment = Alignment.Center,
     ) {
         when {
-            bitmap != null && aspectRatio != null -> {
+            bitmap != null -> {
                 Image(
                     bitmap = bitmap!!,
                     contentDescription = attachment.fileName,
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(aspectRatio),
-                    contentScale = ContentScale.FillWidth,
+                    contentScale = ContentScale.Crop,
                 )
             }
             displayUri != null -> {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(120.dp),
+                        .aspectRatio(aspectRatio),
                     contentAlignment = Alignment.Center,
                 ) {
                     CircularProgressIndicator(
@@ -771,7 +782,17 @@ private fun MediaAttachmentTile(
                 // Avoid decoding a full 1024px bitmap on the composition thread.
                 // A small local preview removes the placeholder; IO replaces it below.
                 maxSide = if (posterUri != null) 320 else 512,
-            )
+            ) ?: posterUri?.let { localPoster ->
+                // A local encrypted-message poster is bounded to a small JPEG by the host.
+                // Decoding it here gives the first Compose frame real pixels and dimensions;
+                // the larger background decode below only improves sharpness.
+                decodeAndCacheAttachmentPreview(
+                    context = context,
+                    uri = localPoster,
+                    preferVideo = false,
+                    maxSide = 320,
+                )
+            }
         }
     }
     val bitmap by produceState<ImageBitmap?>(
@@ -1003,17 +1024,25 @@ private fun FullScreenImagePreview(
 ) {
     val context = LocalContext.current
     BackHandler(onBack = onDismiss)
-    val bitmap by produceState<ImageBitmap?>(null, uri) {
+    // Reuse the preview decoded for the message bubble on the very first frame.
+    // A sharper decode can replace it afterward without showing a spinner or
+    // changing the fitted geometry when the viewer opens.
+    val initialBitmap = remember(uri) {
+        cachedAttachmentPreviewOrNull(uri, preferVideo = false, maxSide = 1024)
+            ?: cachedAttachmentPreviewOrNull(uri, preferVideo = false, maxSide = 512)
+            ?: cachedAttachmentPreviewOrNull(uri, preferVideo = false, maxSide = 320)
+    }
+    val bitmap by produceState<ImageBitmap?>(initialBitmap, uri) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                decodeAttachmentPreview(
-                    context,
-                    uri,
+                decodeAndCacheAttachmentPreview(
+                    context = context,
+                    uri = uri,
                     preferVideo = false,
                     maxSide = 2048,
-                )?.asImageBitmap()
+                )
             }.getOrNull()
-        }
+        } ?: initialBitmap
     }
 
     Dialog(
