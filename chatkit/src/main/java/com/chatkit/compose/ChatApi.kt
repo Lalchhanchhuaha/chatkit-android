@@ -112,6 +112,8 @@ public fun ChatScreen(
     onLoadPreviousMessages: (() -> Unit)? = null,
     onReplyToMessage: (ChatMessage) -> Unit = {},
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
+    /** Stable channel/conversation ID. Changing it resets transient UI and scrolls to the newest message. */
+    conversationId: String? = null,
 ) {
     val theme = colors.toTheme(dimensions, config.showDeliveryStatus)
     @Suppress("DEPRECATION")
@@ -156,6 +158,7 @@ public fun ChatScreen(
         onSubmit = onSubmit,
         onSend = onSendText,
         deliveryStatusContent = deliveryStatusContent,
+        conversationId = conversationId,
     )
 }
 

@@ -116,6 +116,7 @@ private val MessagePlacementAnimation = tween<androidx.compose.ui.unit.IntOffset
 @Composable
 internal fun MessageList(
     messages: List<ChatMessage>,
+    conversationId: String?,
     listState: LazyListState,
     showsSender: Boolean,
     theme: ChatTheme,
@@ -153,10 +154,12 @@ internal fun MessageList(
     val messageSnapshot = messages
     val chronologicalItems = remember(messageSnapshot) { buildTranscriptItems(messageSnapshot) }
     val invertedItems = remember(chronologicalItems) { chronologicalItems.asReversed() }
-    var trackedLastId by remember { mutableStateOf(messageSnapshot.lastOrNull()?.id) }
-    var previousMessageIds by remember { mutableStateOf<Set<String>?>(null) }
-    var hasPositionedTranscript by remember { mutableStateOf(false) }
-    var requestedForOldestId by remember { mutableStateOf<String?>(null) }
+    var trackedLastId by remember(conversationId) {
+        mutableStateOf(messageSnapshot.lastOrNull()?.id)
+    }
+    var previousMessageIds by remember(conversationId) { mutableStateOf<Set<String>?>(null) }
+    var hasPositionedTranscript by remember(conversationId) { mutableStateOf(false) }
+    var requestedForOldestId by remember(conversationId) { mutableStateOf<String?>(null) }
     val currentLoadPreviousMessages by rememberUpdatedState(onLoadPreviousMessages)
 
     LaunchedEffect(
@@ -173,9 +176,11 @@ internal fun MessageList(
         ) return@LaunchedEffect
         snapshotFlow {
             val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.maxOfOrNull { it.index } ?: 0
-            val triggerIndex = (listState.layoutInfo.totalItemsCount - loadPreviousThreshold)
-                .coerceAtLeast(0)
-            listState.isScrollInProgress && lastVisibleIndex >= triggerIndex
+            shouldLoadPreviousMessages(
+                totalItemsCount = listState.layoutInfo.totalItemsCount,
+                lastVisibleItemIndex = lastVisibleIndex,
+                loadPreviousThreshold = loadPreviousThreshold,
+            )
         }
             .distinctUntilChanged()
             .first { it }
@@ -185,9 +190,7 @@ internal fun MessageList(
 
     LaunchedEffect(listState) {
         snapshotFlow {
-            val firstVisible = listState.firstVisibleItemIndex
-            val firstOffset = listState.firstVisibleItemScrollOffset
-            firstVisible <= 1 && firstOffset <= 48
+            listState.firstVisibleItemIndex < AutoScrollItemThreshold
         }
             .distinctUntilChanged()
             .collect(onNewestVisibilityChanged)
@@ -224,20 +227,29 @@ internal fun MessageList(
             return@LaunchedEffect
         }
 
+        val newlyAddedMessages = messageSnapshot.filter { it.id !in previousMessageIds.orEmpty() }
         previousMessageIds = currentMessageIds
         if (lastId == trackedLastId) return@LaunchedEffect
         trackedLastId = lastId
-        if (isViewingNewest || last.direction == MessageDirection.Outgoing) {
+        if (shouldScrollToNewestOnNewMessage(
+                isViewingNewest = isViewingNewest,
+                hasOutgoingMessage = newlyAddedMessages.any { it.direction == MessageDirection.Outgoing },
+                isScrollInProgress = listState.isScrollInProgress,
+            )
+        ) {
             // Stable keys keep the previously visible row anchored when index 0
             // is inserted. Wait until that row is laid out, then scroll so the
             // new bottom row moves into view while existing rows slide upward.
             val renderedItemCount = invertedItems.size
             snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .first { it == renderedItemCount }
+                .first { it >= renderedItemCount }
             listState.animateScrollToItem(0)
             onUnreadIncomingCountChanged(0)
-        } else if (last.isIncoming) {
-            onUnreadIncomingCountChanged(unreadIncomingCount + 1)
+        } else if (!isViewingNewest) {
+            val newIncomingCount = newlyAddedMessages.count(ChatMessage::isIncoming)
+            if (newIncomingCount > 0) {
+                onUnreadIncomingCountChanged(unreadIncomingCount + newIncomingCount)
+            }
         }
     }
 
@@ -308,7 +320,7 @@ internal fun MessageList(
             }
         }
 
-        if (unreadIncomingCount > 0) {
+        if (!isViewingNewest || unreadIncomingCount > 0) {
             UnreadJumpButton(
                 count = unreadIncomingCount,
                 theme = theme,
@@ -320,6 +332,21 @@ internal fun MessageList(
         }
     }
 }
+
+private const val AutoScrollItemThreshold = 3
+
+internal fun shouldScrollToNewestOnNewMessage(
+    isViewingNewest: Boolean,
+    hasOutgoingMessage: Boolean,
+    isScrollInProgress: Boolean,
+): Boolean = !isScrollInProgress && (isViewingNewest || hasOutgoingMessage)
+
+internal fun shouldLoadPreviousMessages(
+    totalItemsCount: Int,
+    lastVisibleItemIndex: Int,
+    loadPreviousThreshold: Int,
+): Boolean = totalItemsCount > loadPreviousThreshold &&
+    lastVisibleItemIndex > totalItemsCount - loadPreviousThreshold - 1
 
 private fun messageRowVerticalInset(
     items: List<TranscriptItem>,
@@ -377,7 +404,11 @@ internal fun UnreadJumpButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val label = if (count == 1) "New message" else "$count new messages"
+    val label = when (count) {
+        0 -> "Jump to newest"
+        1 -> "New message"
+        else -> "$count new messages"
+    }
     Row(
         modifier = modifier
             .shadow(4.dp, RoundedCornerShape(20.dp))

@@ -57,6 +57,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -147,39 +148,47 @@ public fun ChatView(
     onSend: (String) -> Unit = {},
     attachmentContent: (@Composable (ChatAttachment) -> Unit)? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
+    /** Stable channel/conversation ID. Supply this when one ChatView instance can show multiple chats. */
+    conversationId: String? = null,
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    val listState = rememberLazyListState()
+    // Give each conversation an independent scroll position. With no ID, retain the
+    // legacy single-conversation behavior and let MessageList use its ID-overlap fallback.
+    val listState = key(conversationId) { rememberLazyListState() }
     val composerFocusRequester = remember { FocusRequester() }
     val recorder = remember(context) { VoiceRecorder(context.applicationContext) }
     val audioPlayer = remember(context) { AudioPlayerController(context.applicationContext) }
 
-    var draft by remember { mutableStateOf("") }
-    var replyingTo by remember { mutableStateOf<ChatMessage?>(null) }
-    var isAttachmentPickerPresented by remember { mutableStateOf(false) }
-    var isCameraPresented by remember { mutableStateOf(false) }
-    var cameraSessionKey by remember { mutableIntStateOf(0) }
-    var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
-    var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var draft by remember(conversationId) { mutableStateOf("") }
+    var replyingTo by remember(conversationId) { mutableStateOf<ChatMessage?>(null) }
+    var isAttachmentPickerPresented by remember(conversationId) { mutableStateOf(false) }
+    var isCameraPresented by remember(conversationId) { mutableStateOf(false) }
+    var cameraSessionKey by remember(conversationId) { mutableIntStateOf(0) }
+    var editingMessage by remember(conversationId) { mutableStateOf<ChatMessage?>(null) }
+    var selectedMessageIds by remember(conversationId) { mutableStateOf<Set<String>>(emptySet()) }
     val isMessageSelectionMode = selectedMessageIds.isNotEmpty()
     val isEditingMessage = editingMessage != null
-    val pendingMedia = remember { mutableStateListOf<ChatMediaAttachment>() }
-    val pendingDocuments = remember { mutableStateListOf<Uri>() }
-    val optimisticMessages = remember { mutableStateListOf<ChatMessage>() }
+    val pendingMedia = remember(conversationId) { mutableStateListOf<ChatMediaAttachment>() }
+    val pendingDocuments = remember(conversationId) { mutableStateListOf<Uri>() }
+    val optimisticMessages = remember(conversationId) { mutableStateListOf<ChatMessage>() }
 
-    var isRecording by remember { mutableStateOf(false) }
-    var isVoiceRecordingLocked by remember { mutableStateOf(false) }
-    var isVoiceGestureActive by remember { mutableStateOf(false) }
-    var isVoiceLockArmed by remember { mutableStateOf(false) }
-    var isVoiceCancelArmed by remember { mutableStateOf(false) }
-    var voiceDragOffset by remember { mutableFloatStateOf(0f) }
-    var voiceVerticalDragOffset by remember { mutableFloatStateOf(0f) }
+    var isRecording by remember(conversationId) { mutableStateOf(false) }
+    var isVoiceRecordingLocked by remember(conversationId) { mutableStateOf(false) }
+    var isVoiceGestureActive by remember(conversationId) { mutableStateOf(false) }
+    var isVoiceLockArmed by remember(conversationId) { mutableStateOf(false) }
+    var isVoiceCancelArmed by remember(conversationId) { mutableStateOf(false) }
+    var voiceDragOffset by remember(conversationId) { mutableFloatStateOf(0f) }
+    var voiceVerticalDragOffset by remember(conversationId) { mutableFloatStateOf(0f) }
 
-    var isViewingNewest by remember { mutableStateOf(true) }
-    var unreadIncomingCount by remember { mutableIntStateOf(0) }
-    var scrollToNewestRequest by remember { mutableIntStateOf(0) }
+    var isViewingNewest by remember(conversationId) { mutableStateOf(true) }
+    var unreadIncomingCount by remember(conversationId) { mutableIntStateOf(0) }
+    var scrollToNewestRequest by remember(conversationId) { mutableIntStateOf(0) }
+
+    // A recorder is a process resource rather than Compose state. Stop an active
+    // recording when navigation changes the conversation under this surface.
+    LaunchedEffect(conversationId) { recorder.cancel() }
 
     // Snapshot host messages so in-place SnapshotStateList mutations invalidate remember.
     val hostMessages = messages.toList()
@@ -535,6 +544,7 @@ public fun ChatView(
         Column(Modifier.fillMaxSize()) {
             MessageList(
                 messages = displayedMessages,
+                conversationId = conversationId,
                 listState = listState,
                 showsSender = showsSender,
                 theme = theme,
@@ -565,7 +575,10 @@ public fun ChatView(
                 olderMessagesPageSize = olderMessagesPageSize,
                 loadPreviousThreshold = loadPreviousThreshold,
                 onUnreadIncomingCountChanged = { unreadIncomingCount = it },
-                onNewestVisibilityChanged = { isViewingNewest = it },
+                onNewestVisibilityChanged = { isNewestVisible ->
+                    isViewingNewest = isNewestVisible
+                    if (isNewestVisible) unreadIncomingCount = 0
+                },
                 scrollToNewestRequest = scrollToNewestRequest,
                 onJumpToNewest = { scrollToNewestRequest += 1 },
                 attachmentContent = attachmentContent,

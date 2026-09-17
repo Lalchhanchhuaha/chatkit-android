@@ -3,10 +3,13 @@ package com.chatkit.compose
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.util.AtomicFile
+import android.view.ViewGroup
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -35,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +47,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -51,12 +56,18 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.ViewCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -291,40 +302,69 @@ private fun CropOverlay(
     onCropChanged: (NormalizedCrop) -> Unit,
     modifier: Modifier,
 ) {
-    var dragTarget by remember { mutableStateOf<CropDragTarget?>(null) }
-    var dragStart by remember { mutableStateOf(crop) }
-    var accumulatedDrag by remember { mutableStateOf(Offset.Zero) }
     val currentCrop by rememberUpdatedState(crop)
+    val currentOnCropChanged by rememberUpdatedState(onCropChanged)
+    val density = LocalDensity.current
+    val rootView = LocalView.current
+    val cornerHitRadiusPx = with(density) { 48.dp.toPx() }
+    val edgeHitRadiusPx = with(density) { 40.dp.toPx() }
     Canvas(
-        modifier = modifier.pointerInput(bitmapWidth, bitmapHeight, aspectRatio) {
-            detectDragGestures(
-                onDragStart = { point ->
-                    val imageBounds = fittedImageBounds(size.width.toFloat(), size.height.toFloat(), bitmapWidth, bitmapHeight)
-                    dragTarget = cropDragTarget(point, currentCrop, imageBounds)
-                    dragStart = currentCrop
-                    accumulatedDrag = Offset.Zero
-                },
-                onDragEnd = { dragTarget = null },
-                onDragCancel = { dragTarget = null },
-                onDrag = { change, amount ->
-                    change.consume()
-                    accumulatedDrag += amount
-                    val target = dragTarget ?: return@detectDragGestures
-                    val bounds = fittedImageBounds(size.width.toFloat(), size.height.toFloat(), bitmapWidth, bitmapHeight)
-                    onCropChanged(
-                        moveCrop(
-                            start = dragStart,
-                            target = target,
-                            dx = accumulatedDrag.x / bounds.width,
-                            dy = accumulatedDrag.y / bounds.height,
-                            requestedAspect = aspectRatio,
-                            bitmapWidth = bitmapWidth,
-                            bitmapHeight = bitmapHeight,
-                        ),
-                    )
-                },
+        modifier = modifier
+            .cropHandleSystemGestureExclusion(
+                bitmapWidth = bitmapWidth,
+                bitmapHeight = bitmapHeight,
+                crop = crop,
             )
-        },
+            .pointerInput(
+                bitmapWidth,
+                bitmapHeight,
+                aspectRatio,
+                cornerHitRadiusPx,
+                edgeHitRadiusPx,
+            ) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val bounds = fittedImageBounds(
+                        size.width.toFloat(),
+                        size.height.toFloat(),
+                        bitmapWidth,
+                        bitmapHeight,
+                    )
+                    val target = cropDragTarget(
+                        point = down.position,
+                        crop = currentCrop,
+                        bounds = bounds,
+                        cornerHitRadius = cornerHitRadiusPx,
+                        edgeHitRadius = edgeHitRadiusPx,
+                    ) ?: return@awaitEachGesture
+
+                    // Claim a handle touch on ACTION_DOWN. Waiting for touch slop lets
+                    // Android's edge-back recognizer win before Compose starts dragging.
+                    down.consume()
+                    (rootView.parent as? ViewGroup)?.requestDisallowInterceptTouchEvent(true)
+                    val dragStart = currentCrop
+                    var accumulatedDrag = Offset.Zero
+                    try {
+                        drag(down.id) { change ->
+                            change.consume()
+                            accumulatedDrag += change.positionChange()
+                            currentOnCropChanged(
+                                moveCrop(
+                                    start = dragStart,
+                                    target = target,
+                                    dx = accumulatedDrag.x / bounds.width,
+                                    dy = accumulatedDrag.y / bounds.height,
+                                    requestedAspect = aspectRatio,
+                                    bitmapWidth = bitmapWidth,
+                                    bitmapHeight = bitmapHeight,
+                                ),
+                            )
+                        }
+                    } finally {
+                        (rootView.parent as? ViewGroup)?.requestDisallowInterceptTouchEvent(false)
+                    }
+                }
+            },
     ) {
         val imageBounds = fittedImageBounds(size.width, size.height, bitmapWidth, bitmapHeight)
         val rect = crop.toRect(imageBounds)
@@ -390,27 +430,87 @@ private fun NormalizedCrop.toRect(bounds: Rect): Rect = Rect(
     bottom = bounds.top + bottom * bounds.height,
 )
 
-private fun cropDragTarget(point: Offset, crop: NormalizedCrop, bounds: Rect): CropDragTarget? {
+private fun cropDragTarget(
+    point: Offset,
+    crop: NormalizedCrop,
+    bounds: Rect,
+    cornerHitRadius: Float,
+    edgeHitRadius: Float,
+): CropDragTarget? {
     val rect = crop.toRect(bounds)
-    val hit = 42f
     val corners = listOf(
         CropDragTarget.TopLeft to rect.topLeft,
         CropDragTarget.TopRight to Offset(rect.right, rect.top),
         CropDragTarget.BottomLeft to Offset(rect.left, rect.bottom),
         CropDragTarget.BottomRight to rect.bottomRight,
     )
-    corners.firstOrNull { (_, corner) -> abs(point.x - corner.x) <= hit && abs(point.y - corner.y) <= hit }
-        ?.let { return it.first }
-    val edgeHit = 28f
-    if (point.x in (rect.left - edgeHit)..(rect.right + edgeHit)) {
-        if (abs(point.y - rect.top) <= edgeHit) return CropDragTarget.Top
-        if (abs(point.y - rect.bottom) <= edgeHit) return CropDragTarget.Bottom
+    corners.firstOrNull { (_, corner) ->
+        abs(point.x - corner.x) <= cornerHitRadius &&
+            abs(point.y - corner.y) <= cornerHitRadius
     }
-    if (point.y in (rect.top - edgeHit)..(rect.bottom + edgeHit)) {
-        if (abs(point.x - rect.left) <= edgeHit) return CropDragTarget.Left
-        if (abs(point.x - rect.right) <= edgeHit) return CropDragTarget.Right
+        ?.let { return it.first }
+    if (point.x in (rect.left - edgeHitRadius)..(rect.right + edgeHitRadius)) {
+        if (abs(point.y - rect.top) <= edgeHitRadius) return CropDragTarget.Top
+        if (abs(point.y - rect.bottom) <= edgeHitRadius) return CropDragTarget.Bottom
+    }
+    if (point.y in (rect.top - edgeHitRadius)..(rect.bottom + edgeHitRadius)) {
+        if (abs(point.x - rect.left) <= edgeHitRadius) return CropDragTarget.Left
+        if (abs(point.x - rect.right) <= edgeHitRadius) return CropDragTarget.Right
     }
     return if (rect.contains(point)) CropDragTarget.Move else null
+}
+
+/**
+ * Reserves only the six horizontal-edge handle areas from Android's back gesture.
+ * Keeping each rectangle 64dp tall stays within the platform's per-edge exclusion budget.
+ */
+private fun Modifier.cropHandleSystemGestureExclusion(
+    bitmapWidth: Int,
+    bitmapHeight: Int,
+    crop: NormalizedCrop,
+): Modifier = composed {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    val radiusPx = with(density) { 32.dp.roundToPx() }
+    DisposableEffect(view) {
+        onDispose { ViewCompat.setSystemGestureExclusionRects(view, emptyList()) }
+    }
+    Modifier.onGloballyPositioned { coordinates ->
+        if (!coordinates.isAttached || view.width == 0 || view.height == 0) {
+            return@onGloballyPositioned
+        }
+        val imageBounds = fittedImageBounds(
+            coordinates.size.width.toFloat(),
+            coordinates.size.height.toFloat(),
+            bitmapWidth,
+            bitmapHeight,
+        )
+        val cropRect = crop.toRect(imageBounds)
+        val localHandleCenters = listOf(
+            cropRect.topLeft,
+            Offset(cropRect.left, cropRect.center.y),
+            Offset(cropRect.left, cropRect.bottom),
+            Offset(cropRect.right, cropRect.top),
+            Offset(cropRect.right, cropRect.center.y),
+            cropRect.bottomRight,
+        )
+        val viewLocation = IntArray(2)
+        view.getLocationInWindow(viewLocation)
+        val overlayBounds = coordinates.boundsInWindow()
+        val offsetX = overlayBounds.left - viewLocation[0]
+        val offsetY = overlayBounds.top - viewLocation[1]
+        val exclusions = localHandleCenters.mapNotNull { center ->
+            val centerX = (offsetX + center.x).roundToInt()
+            val centerY = (offsetY + center.y).roundToInt()
+            android.graphics.Rect(
+                (centerX - radiusPx).coerceAtLeast(0),
+                (centerY - radiusPx).coerceAtLeast(0),
+                (centerX + radiusPx).coerceAtMost(view.width),
+                (centerY + radiusPx).coerceAtMost(view.height),
+            ).takeUnless { it.isEmpty }
+        }
+        ViewCompat.setSystemGestureExclusionRects(view, exclusions)
+    }
 }
 
 private fun moveCrop(

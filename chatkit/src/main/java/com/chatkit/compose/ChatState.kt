@@ -45,6 +45,8 @@ public data class ChatUiState(
     public val typingIndicatorText: String = "Typing…",
     public val emptyMessage: String = "No messages yet",
     public val error: ChatError? = null,
+    /** Stable channel/conversation ID used to isolate scroll and composer state. */
+    public val conversationId: String? = null,
 )
 
 /** Every operation emitted by the state-driven chat screen. */
@@ -122,6 +124,7 @@ public fun ChatScreen(
                     null
                 },
                 deliveryStatusContent = deliveryStatusContent,
+                conversationId = state.conversationId,
             )
 
             if (state.isInitialLoading && state.messages.isEmpty()) {

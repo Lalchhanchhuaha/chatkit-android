@@ -40,11 +40,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.12")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.13")
 }
 ```
 
-For development snapshots, replace `v1.6.12` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.13` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -59,6 +59,7 @@ Messages are immutable and must be supplied oldest to newest:
 
 ```kotlin
 ChatScreen(
+    conversationId = state.channelId,
     messages = state.messages,
     config = ChatConfig(
         showSenderNames = state.isGroup,
@@ -91,6 +92,12 @@ older-message pagination. `ChatAction` covers submit, optimistic rows, upload ca
 edit, delete, voice recordings, error recovery, and pagination. Your ViewModel translates these
 actions into repository/API calls and publishes the next immutable state.
 
+Set `conversationId` (or `ChatUiState.conversationId`) whenever the same screen can navigate between
+chats. ChatKit uses it to isolate the lazy-list position, draft, selection, reply, pending attachments,
+optimistic rows, unread count, and pagination requests. New incoming messages auto-scroll only while
+the user is near the newest edge; outgoing messages follow to the bottom, and history reading is
+preserved with a jump-to-newest control.
+
 When `onSubmit` is supplied, it is called exactly once. The legacy callbacks (`onSendText`,
 `onMediaPicked`, and `onDocumentsPicked`) are not called for that submission.
 
@@ -121,13 +128,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.12`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.13`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.13 | `conversationId` isolates scroll/composer state; smarter auto-scroll and jump-to-newest; crop handle gesture exclusion |
 | 1.6.12 | Selection toolbar reply action; jump to newest without animation on chat switch |
 | 1.6.11 | WhatsApp-style transcript spacing: tighter same-direction rows, larger gaps on direction changes |
 | 1.6.10 | Shared 4:3 photo/video capture crop; post-capture aspect normalize; richer crop editor aspects/handles |
