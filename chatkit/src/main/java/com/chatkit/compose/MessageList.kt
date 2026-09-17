@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.imeAnimationSource
 import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -69,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -161,6 +163,16 @@ internal fun MessageList(
     var hasPositionedTranscript by remember(conversationId) { mutableStateOf(false) }
     var requestedForOldestId by remember(conversationId) { mutableStateOf<String?>(null) }
     val currentLoadPreviousMessages by rememberUpdatedState(onLoadPreviousMessages)
+    val currentMessageIds = remember(messageSnapshot) {
+        messageSnapshot.asSequence().map(ChatMessage::id).toSet()
+    }
+    val isDifferentTranscript = previousMessageIds?.let { previousIds ->
+        previousIds.isNotEmpty() && previousIds.intersect(currentMessageIds).isEmpty()
+    } == true
+    // Never animate the first population of a transcript. Animating every row on
+    // initial composition makes only the bottom few appear immediately while the
+    // rest visibly settle into place.
+    val animateTranscriptChanges = hasPositionedTranscript && !isDifferentTranscript
 
     LaunchedEffect(
         listState,
@@ -208,11 +220,6 @@ internal fun MessageList(
             trackedLastId = null
             return@LaunchedEffect
         }
-
-        val currentMessageIds = messageSnapshot.asSequence().map(ChatMessage::id).toSet()
-        val isDifferentTranscript = previousMessageIds?.let { previousIds ->
-            previousIds.isNotEmpty() && previousIds.intersect(currentMessageIds).isEmpty()
-        } == true
 
         if (!hasPositionedTranscript || isDifferentTranscript) {
             // Establish the iOS-style initial position without an animation. A
@@ -284,7 +291,7 @@ internal fun MessageList(
                 items = invertedItems,
                 key = { _, item -> item.stableKey() },
             ) { index, item ->
-                AnimatedListRow {
+                AnimatedListRow(animate = animateTranscriptChanges) {
                     when (item) {
                         is TranscriptItem.DaySeparator -> DateSeparator(item.label, theme)
                         is TranscriptItem.Message -> MessageBubble(
@@ -370,10 +377,11 @@ private fun TranscriptItem.stableKey(): String = when (this) {
  */
 @Composable
 private fun LazyItemScope.AnimatedListRow(
+    animate: Boolean,
     content: @Composable () -> Unit,
 ) {
-    val isImeAnimating = isImeAnimating()
-    Box(
+    val rowModifier = if (animate) {
+        val isImeAnimating = isImeAnimating()
         Modifier
             .fillMaxWidth()
             .animateItem(
@@ -382,7 +390,12 @@ private fun LazyItemScope.AnimatedListRow(
                 // A changing IME viewport already moves every row. Running a placement
                 // animation at the same time creates the familiar message-list "jump".
                 placementSpec = if (isImeAnimating) null else MessagePlacementAnimation,
-            ),
+            )
+    } else {
+        Modifier.fillMaxWidth()
+    }
+    Box(
+        rowModifier,
     ) {
         content()
     }
@@ -474,9 +487,7 @@ internal fun MessageBubble(
     val density = LocalDensity.current
     val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
     val textMeasurer = rememberTextMeasurer()
-    val currentSelectionMode by rememberUpdatedState(isMessageSelectionMode)
     val currentLongPress by rememberUpdatedState(onLongPress)
-    val currentSelectionTap by rememberUpdatedState(onSelectionTap)
     var singleImageBubbleWidth by remember(message.id) { mutableStateOf<Dp?>(null) }
     val rowGestureModifier = Modifier.pointerInput(message.id) {
         val allowedMovement = 20.dp.toPx()
@@ -486,24 +497,6 @@ internal fun MessageBubble(
                 pass = PointerEventPass.Initial,
             )
             val initialPosition = down.position
-
-            if (currentSelectionMode) {
-                // Selection owns the complete row, including attachment buttons and
-                // the transparent space around an outgoing bubble.
-                down.consume()
-                while (true) {
-                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                    change.consume()
-                    val delta = change.position - initialPosition
-                    if (hypot(delta.x, delta.y) > allowedMovement) break
-                    if (!change.pressed) {
-                        currentSelectionTap()
-                        break
-                    }
-                }
-                return@awaitEachGesture
-            }
 
             if (currentLongPress == null) return@awaitEachGesture
 
@@ -782,6 +775,25 @@ internal fun MessageBubble(
             if (incoming) {
                 Spacer(Modifier.widthIn(min = sideInset).weight(1f))
             }
+        }
+
+        if (isMessageSelectionMode) {
+            // A topmost transparent surface owns the entire row while selecting.
+            // This prevents links, attachments, retry buttons, and empty bubble
+            // margins from intercepting taps intended to add/remove selection.
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .zIndex(100f)
+                    .clickable(onClick = onSelectionTap)
+                    .semantics {
+                        contentDescription = if (isSelected) {
+                            "Deselect message"
+                        } else {
+                            "Select message"
+                        }
+                    },
+            )
         }
     }
 }

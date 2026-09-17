@@ -9,7 +9,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -56,6 +55,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -345,9 +345,17 @@ private fun CropOverlay(
                     val dragStart = currentCrop
                     var accumulatedDrag = Offset.Zero
                     try {
-                        drag(down.id) { change ->
-                            change.consume()
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.changedToUp() || !change.pressed) {
+                                change.consume()
+                                break
+                            }
+                            // Read the delta before consume(); consumed changes report
+                            // no available movement on current Compose versions.
                             accumulatedDrag += change.positionChange()
+                            change.consume()
                             currentOnCropChanged(
                                 moveCrop(
                                     start = dragStart,

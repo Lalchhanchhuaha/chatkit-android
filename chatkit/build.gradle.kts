@@ -68,7 +68,7 @@ dependencies {
 // JitPack supplies GROUP and VERSION for tagged GitHub builds. Local publishing keeps stable
 // coordinates so consumers can also test the AAR through mavenLocal().
 group = providers.environmentVariable("GROUP").getOrElse("com.chatkit")
-version = providers.environmentVariable("VERSION").getOrElse("1.6.13")
+version = providers.environmentVariable("VERSION").getOrElse("1.6.14")
 
 afterEvaluate {
     publishing {
