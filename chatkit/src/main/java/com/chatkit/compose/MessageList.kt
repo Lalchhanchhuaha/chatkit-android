@@ -45,15 +45,16 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -330,13 +331,15 @@ internal fun MessageList(
             }
         }
 
-        if (!isViewingNewest || unreadIncomingCount > 0) {
+        // WhatsApp / iOS: only show while scrolled away and new incoming messages arrived.
+        // Tapping scrolls to newest; incoming messages never auto-scroll in this state.
+        if (unreadIncomingCount > 0) {
             UnreadJumpButton(
                 count = unreadIncomingCount,
                 theme = theme,
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 8.dp),
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 12.dp),
                 onClick = onJumpToNewest,
             )
         }
@@ -420,28 +423,32 @@ internal fun UnreadJumpButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val label = when (count) {
-        0 -> "Jump to newest"
-        1 -> "New message"
-        else -> "$count new messages"
-    }
+    val label = if (count == 1) "1 new message" else "$count new messages"
     Row(
         modifier = modifier
-            .shadow(4.dp, RoundedCornerShape(20.dp))
-            .clip(RoundedCornerShape(20.dp))
+            .shadow(5.dp, RoundedCornerShape(50))
+            .clip(RoundedCornerShape(50))
             .background(theme.accentColor)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 12.dp)
+            .height(32.dp)
             .semantics {
                 contentDescription = label
             },
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = theme.accentContentColor,
+            modifier = Modifier.size(16.dp),
+        )
         Text(
-            text = label,
+            text = count.toString(),
             color = theme.accentContentColor,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
         )
     }
 }
