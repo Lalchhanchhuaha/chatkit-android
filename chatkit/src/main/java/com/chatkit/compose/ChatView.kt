@@ -288,10 +288,12 @@ public fun ChatView(
 
     fun canSelectMessage(message: ChatMessage): Boolean {
         if (message.text.contains("was deleted", ignoreCase = true)) return false
+        // Selection eligibility is row-based, not edit eligibility. Attachments and
+        // incoming messages must still be selectable for reply/delete; the toolbar
+        // separately decides whether Edit is valid for the final selection.
         return (swipeToReplyEnabled && showsComposer) ||
             onDeleteMessage != null ||
-            (onEditMessage != null && message.canEdit(Instant.now(), modificationWindowMillis) &&
-                message.attachments.isEmpty())
+            onEditMessage != null
     }
 
     fun beginMessageSelection(message: ChatMessage) {

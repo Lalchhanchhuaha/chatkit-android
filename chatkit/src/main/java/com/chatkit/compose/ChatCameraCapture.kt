@@ -315,9 +315,10 @@ private fun ChatCameraDestination(
                         onCancel = onClose,
                     )
                 } else {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color.White)
-                    }
+                    // The system permission sheet supplies its own progress. Keep
+                    // the camera destination visually stable instead of flashing a
+                    // circular loader behind it.
+                    CameraPermissionBackground(onClose = onClose)
                 }
             }
             ChatCameraState.Live -> {
@@ -357,6 +358,27 @@ private fun ChatCameraDestination(
 }
 
 @Composable
+private fun CameraPermissionBackground(onClose: () -> Unit) {
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        CameraChromeButton(
+            contentDescription = "Close",
+            onClick = onClose,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(start = 18.dp, top = 14.dp),
+        ) {
+            Icon(Icons.Default.Close, contentDescription = null, tint = Color.White)
+        }
+    }
+}
+
+private data class CameraBindingConfig(
+    val lensFacingFront: Boolean,
+    val captureMode: CaptureMode,
+)
+
+@Composable
 private fun LiveCameraScreen(
     theme: ChatTheme,
     showsVideoAttachments: Boolean,
@@ -382,26 +404,41 @@ private fun LiveCameraScreen(
     var maxZoom by remember { mutableFloatStateOf(1f) }
     var currentZoom by remember { mutableFloatStateOf(1f) }
     var hasUltraWide by remember { mutableStateOf(false) }
+    var boundConfig by remember { mutableStateOf<CameraBindingConfig?>(null) }
 
     val audioPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { /* silent video allowed when denied */ }
 
-    fun bindCamera(provider: ProcessCameraProvider, preview: PreviewView) {
-        if (rebinding) return
+    fun bindCamera(
+        provider: ProcessCameraProvider,
+        preview: PreviewView,
+        config: CameraBindingConfig,
+    ) {
         rebinding = true
+        val previousConfig = boundConfig
         try {
+            val selector = if (config.lensFacingFront) {
+                CameraSelector.DEFAULT_FRONT_CAMERA
+            } else {
+                CameraSelector.DEFAULT_BACK_CAMERA
+            }
+            if (!provider.hasCamera(selector)) {
+                if (previousConfig == null) {
+                    viewModel.markCameraUnavailable()
+                } else if (config.lensFacingFront != previousConfig.lensFacingFront) {
+                    // Keep the still-running lens and put UI state back in sync.
+                    viewModel.toggleLensFacing()
+                }
+                return
+            }
+
             activeRecording?.stop()
             activeRecording = null
             viewModel.updateRecording(false)
             provider.unbindAll()
 
-            val selector = if (viewModel.lensFacingFront) {
-                CameraSelector.DEFAULT_FRONT_CAMERA
-            } else {
-                CameraSelector.DEFAULT_BACK_CAMERA
-            }
-            val photoMode = viewModel.captureMode == CaptureMode.PHOTO
+            val photoMode = config.captureMode == CaptureMode.PHOTO
             // iOS keeps the same 4:3 sensor crop for both modes. Switching the
             // preview to 16:9 for video changes the field of view and makes the
             // mode toggle visibly jump.
@@ -463,6 +500,8 @@ private fun LiveCameraScreen(
                 selector,
                 groupBuilder.build(),
             )
+            boundConfig = config
+            viewModel.markCameraAvailable()
             camera = bound
             torchSupported = bound.cameraInfo.hasFlashUnit()
             if (!torchSupported) {
@@ -475,29 +514,68 @@ private fun LiveCameraScreen(
             currentZoom = zoomState?.zoomRatio ?: 1f
             hasUltraWide = minZoom <= 0.6f
             // Prefer normal 1x when available.
-            if (!viewModel.lensFacingFront && abs(currentZoom - 1f) > 0.05f && minZoom <= 1f && maxZoom >= 1f) {
+            if (!config.lensFacingFront && abs(currentZoom - 1f) > 0.05f && minZoom <= 1f && maxZoom >= 1f) {
                 runCatching { bound.cameraControl.setZoomRatio(1f) }
                 currentZoom = 1f
             }
-            if (viewModel.flashEnabled && torchSupported && viewModel.captureMode == CaptureMode.PHOTO) {
+            if (viewModel.flashEnabled && torchSupported && config.captureMode == CaptureMode.PHOTO) {
                 // Photo flash is applied per capture; torch used for video.
             }
         } catch (_: Exception) {
-            viewModel.markCameraUnavailable()
+            camera = null
+            imageCapture = null
+            videoCapture = null
+            boundConfig = null
+            if (previousConfig == null) {
+                viewModel.markCameraUnavailable()
+            } else {
+                // Revert the requested state. The keyed effect will perform one
+                // clean recovery bind using the last known-good configuration.
+                if (viewModel.lensFacingFront != previousConfig.lensFacingFront) {
+                    viewModel.toggleLensFacing()
+                }
+                if (viewModel.captureMode != previousConfig.captureMode) {
+                    viewModel.updateCaptureMode(previousConfig.captureMode)
+                }
+            }
         } finally {
             rebinding = false
         }
     }
 
-    LaunchedEffect(previewView, viewModel.lensFacingFront, viewModel.captureMode, showsVideoAttachments) {
-        val preview = previewView ?: return@LaunchedEffect
-        val provider = withContext(Dispatchers.IO) {
-            ProcessCameraProvider.getInstance(context).get()
+    // Resolve ProcessCameraProvider once per live-camera lifetime. Re-fetching it
+    // for every lens/mode switch adds latency and creates avoidable bind races.
+    LaunchedEffect(Unit) {
+        cameraProvider = runCatching {
+            withContext(Dispatchers.IO) {
+                ProcessCameraProvider.getInstance(context).get()
+            }
+        }.getOrElse {
+            viewModel.markCameraUnavailable()
+            null
         }
-        cameraProvider = provider
+    }
+
+    LaunchedEffect(
+        previewView,
+        cameraProvider,
+        viewModel.lensFacingFront,
+        viewModel.captureMode,
+        showsVideoAttachments,
+    ) {
+        val preview = previewView ?: return@LaunchedEffect
+        val provider = cameraProvider ?: return@LaunchedEffect
+        val requestedConfig = CameraBindingConfig(
+            lensFacingFront = viewModel.lensFacingFront,
+            captureMode = viewModel.captureMode,
+        )
+        if (requestedConfig == boundConfig) {
+            rebinding = false
+            return@LaunchedEffect
+        }
         // Wait for AndroidView layout without posting a callback that could outlive this screen.
         withFrameNanos { }
-        if (isActive) bindCamera(provider, preview)
+        if (isActive) bindCamera(provider, preview, requestedConfig)
     }
 
     DisposableEffect(Unit) {
@@ -666,7 +744,12 @@ private fun LiveCameraScreen(
                     label = "Photo",
                     selected = viewModel.captureMode == CaptureMode.PHOTO,
                     enabled = !viewModel.isRecording && !rebinding,
-                    onClick = { viewModel.updateCaptureMode(CaptureMode.PHOTO) },
+                    onClick = {
+                        if (viewModel.captureMode != CaptureMode.PHOTO) {
+                            rebinding = true
+                            viewModel.updateCaptureMode(CaptureMode.PHOTO)
+                        }
+                    },
                 )
                 ModeChip(
                     label = "Video",
@@ -680,7 +763,10 @@ private fun LiveCameraScreen(
                         ) {
                             audioPermission.launch(Manifest.permission.RECORD_AUDIO)
                         }
-                        viewModel.updateCaptureMode(CaptureMode.VIDEO)
+                        if (viewModel.captureMode != CaptureMode.VIDEO) {
+                            rebinding = true
+                            viewModel.updateCaptureMode(CaptureMode.VIDEO)
+                        }
                     },
                 )
             }
@@ -795,7 +881,14 @@ private fun LiveCameraScreen(
                     "Switch to front camera"
                 },
                 enabled = !rebinding && !viewModel.isRecording,
-                onClick = { viewModel.toggleLensFacing() },
+                onClick = {
+                    // Lock synchronously; waiting for the rebind effect leaves a
+                    // frame where rapid double taps can queue contradictory binds.
+                    if (!rebinding) {
+                        rebinding = true
+                        viewModel.toggleLensFacing()
+                    }
+                },
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 28.dp),

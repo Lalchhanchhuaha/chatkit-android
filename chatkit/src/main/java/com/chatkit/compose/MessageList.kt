@@ -39,7 +39,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.imeAnimationSource
 import androidx.compose.foundation.layout.imeAnimationTarget
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -781,6 +780,7 @@ internal fun MessageBubble(
             // A topmost transparent surface owns the entire row while selecting.
             // This prevents links, attachments, retry buttons, and empty bubble
             // margins from intercepting taps intended to add/remove selection.
+            // Compose 1.10+: Modifier.matchParentSize() is a BoxScope member (no import).
             Box(
                 modifier = Modifier
                     .matchParentSize()

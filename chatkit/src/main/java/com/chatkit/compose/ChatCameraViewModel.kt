@@ -1,6 +1,8 @@
 package com.chatkit.compose
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -11,6 +13,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
@@ -90,7 +93,18 @@ internal class ChatCameraViewModel(
                 )
             }
         }
-        return ChatCameraState.RequestingPermission
+        // Avoid rendering a fake loading state every time the camera opens. If
+        // permission already exists, mount PreviewView on the very first frame.
+        return if (
+            ContextCompat.checkSelfPermission(
+                getApplication<Application>(),
+                Manifest.permission.CAMERA,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            ChatCameraState.Live
+        } else {
+            ChatCameraState.RequestingPermission
+        }
     }
 
     fun onPermissionGranted() {
@@ -107,6 +121,10 @@ internal class ChatCameraViewModel(
 
     fun markCameraUnavailable() {
         cameraUnavailable = true
+    }
+
+    fun markCameraAvailable() {
+        cameraUnavailable = false
     }
 
     fun updateCaptureMode(mode: CaptureMode) {
