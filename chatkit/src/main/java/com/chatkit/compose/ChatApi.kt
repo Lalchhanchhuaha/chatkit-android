@@ -65,6 +65,8 @@ public data class ChatColors(
     public val typingIndicatorContent: Color,
     public val composerButtonBackground: Color = Color(0xFFEFF3F6),
     public val composerIcon: Color = Color(0xFF5F7186),
+    /** Left bar + sender label when a reply quote references the current user's own message. */
+    public val replyQuoteSelfSender: Color = accent,
 )
 
 /** Layout dimensions for message bubbles. */
@@ -169,7 +171,7 @@ private fun ChatTheme.toColors(): ChatColors = ChatColors(
     dateSeparatorTextColor, attachmentPanelBackgroundColor, attachmentTileBackgroundColor,
     thumbnailPlaceholderBackgroundColor, incomingBubbleBorderColor, readReceiptColor,
     typingIndicatorBubbleColor, typingIndicatorTextColor, composerButtonBackgroundColor,
-    composerIconColor,
+    composerIconColor, replyQuoteSelfSenderColor,
 )
 
 private fun ChatColors.toTheme(dimensions: ChatDimensions, showDeliveryStatus: Boolean): ChatTheme =
@@ -197,6 +199,7 @@ private fun ChatColors.toTheme(dimensions: ChatDimensions, showDeliveryStatus: B
         typingIndicatorTextColor = typingIndicatorContent,
         composerButtonBackgroundColor = composerButtonBackground,
         composerIconColor = composerIcon,
+        replyQuoteSelfSenderColor = replyQuoteSelfSender,
         bubbleCornerRadius = dimensions.bubbleCornerRadius,
         messageMaximumWidth = dimensions.maximumBubbleWidth,
         showsDeliveryStatus = showDeliveryStatus,

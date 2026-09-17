@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Reply
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -69,10 +70,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.ContentScale
@@ -80,6 +83,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -466,10 +470,18 @@ internal fun MessageBubble(
     val incoming = message.isIncoming
     val corner = if (theme.bubbleCornerRadius == Dp.Unspecified) 12.dp else theme.bubbleCornerRadius
     val bubbleShape = messageBubbleShape(incoming, corner)
-    val maximumSwipe = with(LocalDensity.current) { 76.dp.toPx() }
-    val replyThreshold = with(LocalDensity.current) { 52.dp.toPx() }
-    var swipeTarget by remember(message.id) { mutableFloatStateOf(0f) }
-    val swipeOffset by animateFloatAsState(swipeTarget, tween(120), label = "reply-swipe")
+    val replyThreshold = with(LocalDensity.current) { MessageSwipeToReply.ThresholdDp.dp.toPx() }
+    val maximumSwipe = with(LocalDensity.current) { MessageSwipeToReply.MaxPullDp.dp.toPx() }
+    var swipeRaw by remember(message.id) { mutableFloatStateOf(0f) }
+    var isSwipeDragging by remember(message.id) { mutableStateOf(false) }
+    var didFireThresholdHaptic by remember(message.id) { mutableStateOf(false) }
+    val swipePull = MessageSwipeToReply.resistedPull(swipeRaw, replyThreshold, maximumSwipe)
+    val swipeOffset by animateFloatAsState(
+        targetValue = if (isSwipeDragging) swipePull else 0f,
+        animationSpec = tween(if (isSwipeDragging) 0 else 220),
+        label = "reply-swipe",
+    )
+    val swipeProgress = MessageSwipeToReply.progress(swipeOffset, replyThreshold)
     val hasMedia = message.attachments.any { it.isImage || it.isVideo || it.isAudio }
     val sideInset = if (hasMedia) 20.dp else 56.dp
     val trimmedText = message.text.trim()
@@ -484,7 +496,7 @@ internal fun MessageBubble(
     val timestampColor = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor
     val textColor = if (incoming) theme.incomingTextColor else theme.outgoingTextColor
     val density = LocalDensity.current
-    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val hapticFeedback = LocalHapticFeedback.current
     val textMeasurer = rememberTextMeasurer()
     val currentLongPress by rememberUpdatedState(onLongPress)
     val rowGestureModifier = Modifier.pointerInput(message.id) {
@@ -520,7 +532,7 @@ internal fun MessageBubble(
             if (endedBeforeDeadline != null || movedTooFar || released) return@awaitEachGesture
 
             hapticFeedback.performHapticFeedback(
-                androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress,
+                HapticFeedbackType.LongPress,
             )
             currentLongPress?.invoke()
 
@@ -540,11 +552,24 @@ internal fun MessageBubble(
         Modifier.draggable(
             orientation = Orientation.Horizontal,
             state = rememberDraggableState { delta ->
-                swipeTarget = (swipeTarget + delta).coerceIn(0f, maximumSwipe)
+                isSwipeDragging = true
+                swipeRaw = (swipeRaw + delta).coerceAtLeast(0f)
+                val pull = MessageSwipeToReply.resistedPull(swipeRaw, replyThreshold, maximumSwipe)
+                if (MessageSwipeToReply.didCrossThreshold(pull, replyThreshold)) {
+                    if (!didFireThresholdHaptic) {
+                        didFireThresholdHaptic = true
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
+                } else {
+                    didFireThresholdHaptic = false
+                }
             },
             onDragStopped = {
-                if (swipeTarget >= replyThreshold) onReply()
-                swipeTarget = 0f
+                val pull = MessageSwipeToReply.resistedPull(swipeRaw, replyThreshold, maximumSwipe)
+                if (MessageSwipeToReply.didCrossThreshold(pull, replyThreshold)) onReply()
+                isSwipeDragging = false
+                swipeRaw = 0f
+                didFireThresholdHaptic = false
             },
         )
     }
@@ -619,12 +644,14 @@ internal fun MessageBubble(
             contentBubbleWidth
         }
 
-        if (swipeOffset > 4f) {
-            Text(
-                text = "↩",
-                color = theme.accentColor,
-                fontSize = 22.sp,
-                modifier = Modifier.align(Alignment.CenterStart).padding(start = 14.dp),
+        if (swipeProgress > 0.01f) {
+            SwipeReplyAffordance(
+                progress = swipeProgress,
+                pullPx = swipeOffset,
+                arrowColor = theme.outgoingBubbleColor,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 14.dp),
             )
         }
         Row(
@@ -1115,6 +1142,38 @@ private fun DeliveryStatus(status: DeliveryStatus, theme: ChatTheme, onRetry: ()
         timestampColor = theme.outgoingTimestampColor,
         onRetry = onRetry,
     )
+}
+
+/** iOS-style white circular chip with reply arrow (`arrowshape.turn.up.left`). */
+@Composable
+private fun SwipeReplyAffordance(
+    progress: Float,
+    pullPx: Float,
+    arrowColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val scale = 0.72f + (0.28f * progress)
+    Box(
+        modifier = modifier
+            .offset { IntOffset((pullPx * 0.12f).roundToInt(), 0) }
+            .graphicsLayer {
+                alpha = progress
+                scaleX = scale
+                scaleY = scale
+            }
+            .size(MessageSwipeToReply.AffordanceSideDp.dp)
+            .clip(CircleShape)
+            .background(Color.White)
+            .semantics { contentDescription = "Reply" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Reply,
+            contentDescription = null,
+            tint = arrowColor,
+            modifier = Modifier.size(16.dp),
+        )
+    }
 }
 
 @Composable
