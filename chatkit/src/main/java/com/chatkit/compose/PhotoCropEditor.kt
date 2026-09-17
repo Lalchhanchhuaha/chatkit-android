@@ -20,19 +20,20 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.RotateRight
-import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,8 +49,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
@@ -62,6 +65,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -97,23 +101,23 @@ private data class CropAspect(val kind: CropAspectKind, val label: String, val r
 private fun cropAspects(bitmap: Bitmap): List<CropAspect> {
     val portrait = bitmap.height >= bitmap.width
     return listOf(
-        CropAspect(CropAspectKind.Freeform, "Freeform", null),
-        CropAspect(
-            CropAspectKind.Original,
-            "Original",
-            bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1),
-        ),
-        CropAspect(CropAspectKind.Square, "Square", 1f),
-        CropAspect(
-            CropAspectKind.FourThree,
-            if (portrait) "3:4" else "4:3",
-            if (portrait) 3f / 4f else 4f / 3f,
-        ),
         CropAspect(
             CropAspectKind.SixteenNine,
             if (portrait) "9:16" else "16:9",
             if (portrait) 9f / 16f else 16f / 9f,
         ),
+        CropAspect(
+            CropAspectKind.FourThree,
+            if (portrait) "3:4" else "4:3",
+            if (portrait) 3f / 4f else 4f / 3f,
+        ),
+        CropAspect(CropAspectKind.Square, "Square", 1f),
+        CropAspect(
+            CropAspectKind.Original,
+            "Original",
+            bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1),
+        ),
+        CropAspect(CropAspectKind.Freeform, "Freeform", null),
     )
 }
 
@@ -215,7 +219,11 @@ internal fun PhotoCropEditor(
                     } ?: NormalizedCrop(0f, 0f, 1f, 1f)
                 },
             ) {
-                Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = null, tint = Color.White)
+                Icon(
+                    painter = painterResource(R.drawable.rotate),
+                    contentDescription = null,
+                    tint = Color.White,
+                )
             }
 
             TextButton(
@@ -235,30 +243,25 @@ internal fun PhotoCropEditor(
                     enabled = !saving,
                     onClick = { aspectMenuExpanded = true },
                 ) {
-                    Icon(Icons.Default.AspectRatio, contentDescription = null, tint = Color.White)
+                    Icon(
+                        painter = painterResource(R.drawable.aspect_ratio),
+                        contentDescription = null,
+                        tint = Color.White,
+                    )
                 }
-                DropdownMenu(
+                AspectRatioMenu(
                     expanded = aspectMenuExpanded,
-                    onDismissRequest = { aspectMenuExpanded = false },
-                ) {
-                    aspects.forEach { choice ->
-                        DropdownMenuItem(
-                            text = { Text(choice.label) },
-                            trailingIcon = if (choice.kind == selectedAspectKind) {
-                                { Icon(Icons.Default.Check, contentDescription = null) }
-                            } else {
-                                null
-                            },
-                            onClick = {
-                                selectedAspectKind = choice.kind
-                                crop = choice.ratio?.let {
-                                    centeredCropForAspect(it, bitmap.width, bitmap.height)
-                                } ?: NormalizedCrop(0f, 0f, 1f, 1f)
-                                aspectMenuExpanded = false
-                            },
-                        )
-                    }
-                }
+                    aspects = aspects,
+                    selectedKind = selectedAspectKind,
+                    onDismiss = { aspectMenuExpanded = false },
+                    onSelect = { choice ->
+                        selectedAspectKind = choice.kind
+                        crop = choice.ratio?.let {
+                            centeredCropForAspect(it, bitmap.width, bitmap.height)
+                        } ?: NormalizedCrop(0f, 0f, 1f, 1f)
+                        aspectMenuExpanded = false
+                    },
+                )
             }
         }
 
@@ -270,6 +273,126 @@ internal fun PhotoCropEditor(
                 CircularProgressIndicator(color = accentColor)
             }
         }
+    }
+}
+
+private val AspectMenuBackground = Color(0xFF2C2C2E)
+private val AspectMenuDivider = Color.White.copy(alpha = 0.10f)
+private val AspectMenuShape = RoundedCornerShape(18.dp)
+
+@Composable
+private fun AspectRatioMenu(
+    expanded: Boolean,
+    aspects: List<CropAspect>,
+    selectedKind: CropAspectKind,
+    onDismiss: () -> Unit,
+    onSelect: (CropAspect) -> Unit,
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.widthIn(min = 212.dp),
+        shape = AspectMenuShape,
+        containerColor = AspectMenuBackground,
+        tonalElevation = 0.dp,
+        shadowElevation = 16.dp,
+    ) {
+        Text(
+            text = "Aspect Ratio",
+            color = Color.White.copy(alpha = 0.55f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        )
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 12.dp),
+            thickness = 0.5.dp,
+            color = AspectMenuDivider,
+        )
+        aspects.forEachIndexed { index, choice ->
+            val selected = choice.kind == selectedKind
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(choice) }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                AspectShapeIcon(
+                    kind = choice.kind,
+                    ratio = choice.ratio,
+                )
+                Text(
+                    text = choice.label,
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(
+                    modifier = Modifier.size(20.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (selected) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+            if (index < aspects.lastIndex) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    thickness = 0.5.dp,
+                    color = AspectMenuDivider,
+                )
+            }
+        }
+    }
+}
+
+/** Small outline glyph that mirrors the crop frame shape for each aspect option. */
+@Composable
+private fun AspectShapeIcon(
+    kind: CropAspectKind,
+    ratio: Float?,
+    modifier: Modifier = Modifier,
+) {
+    val strokeColor = Color.White.copy(alpha = 0.90f)
+    if (kind == CropAspectKind.Freeform) {
+        Icon(
+            imageVector = Icons.Default.Crop,
+            contentDescription = null,
+            tint = strokeColor,
+            modifier = modifier.size(24.dp),
+        )
+        return
+    }
+    Canvas(modifier = modifier.size(24.dp)) {
+        val stroke = Stroke(width = 1.6.dp.toPx())
+        val pad = 2.dp.toPx()
+        val availW = size.width - pad * 2f
+        val availH = size.height - pad * 2f
+        val corner = CornerRadius(3.dp.toPx(), 3.dp.toPx())
+        val r = (ratio ?: 1f).coerceAtLeast(0.05f)
+        val (w, h) = if (r >= 1f) {
+            val width = availW
+            width to (width / r).coerceAtMost(availH)
+        } else {
+            val height = availH
+            (height * r).coerceAtMost(availW) to height
+        }
+        drawRoundRect(
+            color = strokeColor,
+            topLeft = Offset((size.width - w) / 2f, (size.height - h) / 2f),
+            size = Size(w, h),
+            cornerRadius = corner,
+            style = stroke,
+        )
     }
 }
 

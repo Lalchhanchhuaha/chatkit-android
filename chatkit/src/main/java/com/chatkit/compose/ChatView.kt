@@ -44,9 +44,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Reply
 import androidx.compose.material3.HorizontalDivider
@@ -74,12 +72,15 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -736,7 +737,7 @@ public fun ChatView(
                                     if (showsCameraButton) {
                                         Spacer(Modifier.width(8.dp))
                                         ComposerButton(
-                                            icon = Icons.Default.CameraAlt,
+                                            painter = painterResource(R.drawable.camera),
                                             contentDescription = "Open camera",
                                             enabled = !isEditingMessage,
                                             theme = theme,
@@ -1023,7 +1024,7 @@ private fun MessageSelectionToolbar(
         }
         if (canDelete) {
             Icon(
-                imageVector = Icons.Default.Delete,
+                painter = painterResource(R.drawable.delete),
                 contentDescription = null,
                 tint = Color.Red,
                 modifier = Modifier
@@ -1129,6 +1130,23 @@ internal fun ComposerButton(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    ComposerButton(
+        painter = rememberVectorPainter(icon),
+        theme = theme,
+        contentDescription = contentDescription,
+        enabled = enabled,
+        onClick = onClick,
+    )
+}
+
+@Composable
+internal fun ComposerButton(
+    painter: Painter,
+    theme: ChatTheme,
+    contentDescription: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     Box(
         modifier = Modifier
             .size(ComposerBarControlSize)
@@ -1147,7 +1165,7 @@ internal fun ComposerButton(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = icon,
+                painter = painter,
                 contentDescription = null,
                 tint = theme.composerIconColor.copy(alpha = if (enabled) 1f else 0.45f),
                 modifier = Modifier.size(18.dp),

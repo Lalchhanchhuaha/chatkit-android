@@ -52,7 +52,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Reply
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -84,6 +83,7 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -1168,7 +1168,7 @@ private fun SwipeReplyAffordance(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = Icons.Filled.Reply,
+            painter = painterResource(R.drawable.arrow),
             contentDescription = null,
             tint = arrowColor,
             modifier = Modifier.size(16.dp),

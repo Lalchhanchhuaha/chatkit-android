@@ -42,6 +42,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,13 +72,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Crop
-import androidx.compose.material.icons.filled.FlashOff
-import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
@@ -114,7 +112,10 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -632,9 +633,12 @@ private fun LiveCameraScreen(
                 },
             ) {
                 Icon(
-                    if (viewModel.flashEnabled) Icons.Default.FlashOn else Icons.Default.FlashOff,
+                    painter = painterResource(
+                        if (viewModel.flashEnabled) R.drawable.flash_on else R.drawable.flash_off,
+                    ),
                     contentDescription = null,
                     tint = if (viewModel.flashEnabled) Color(0xFFFFD60A) else Color.White,
+                    modifier = Modifier.size(24.dp),
                 )
             }
         }
@@ -893,7 +897,12 @@ private fun LiveCameraScreen(
                     .align(Alignment.CenterEnd)
                     .padding(end = 28.dp),
             ) {
-                Icon(Icons.Default.Cameraswitch, contentDescription = null, tint = Color.White)
+                Icon(
+                    painter = painterResource(R.drawable.switch_camera),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
             }
         }
 
@@ -924,6 +933,8 @@ private fun ReviewScreen(
     onSend: () -> Unit,
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val sendEnabled = !viewModel.submitInFlight
     var isCropping by remember(capture.id) { mutableStateOf(false) }
     var cropRevision by remember(capture.id) { mutableIntStateOf(0) }
@@ -966,7 +977,13 @@ private fun ReviewScreen(
             .background(Color.Black)
             .statusBarsPadding()
             // Lift the caption/send row above the keyboard without double-counting nav bars.
-            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
+            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+            .pointerInput(Unit) {
+                detectTapGestures {
+                    focusManager.clearFocus(force = true)
+                    keyboardController?.hide()
+                }
+            },
     ) {
         Row(
             modifier = Modifier
@@ -1013,18 +1030,8 @@ private fun ReviewScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .then(
-                    if (capture.mediaType == MediaType.Photo) {
-                        Modifier.padding(horizontal = 8.dp)
-                    } else {
-                        Modifier
-                    },
-                ),
-            contentAlignment = if (capture.mediaType == MediaType.Video) {
-                Alignment.TopCenter
-            } else {
-                Alignment.Center
-            },
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center,
         ) {
             when (capture.mediaType) {
                 MediaType.Photo -> {
@@ -1063,7 +1070,7 @@ private fun ReviewScreen(
                     .weight(1f)
                     .height(48.dp)
                     .clip(RoundedCornerShape(24.dp))
-                    .background(Color.White.copy(alpha = 0.12f))
+                    .background(Color(0xFF2C2C2E))
                     .padding(horizontal = 14.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
@@ -1176,7 +1183,7 @@ private fun VideoReviewPlayer(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            contentAlignment = Alignment.TopCenter,
+            contentAlignment = Alignment.Center,
         ) {
             Box(
                 modifier = Modifier
