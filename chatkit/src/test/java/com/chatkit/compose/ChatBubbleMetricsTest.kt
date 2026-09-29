@@ -9,6 +9,12 @@ import org.junit.Test
 
 class ChatBubbleMetricsTest {
     @Test
+    fun voiceBubbleUsesIosCompactWidth() {
+        assertEquals(252.dp, ChatBubbleMetrics.voiceBubbleWidth(300.dp))
+        assertEquals(220.dp, ChatBubbleMetrics.voiceBubbleWidth(220.dp))
+    }
+
+    @Test
     fun maxBubbleWidthUsesScreenRatioWhenThemeUnspecified() {
         val width = ChatBubbleMetrics.maxBubbleWidth(360.dp, Dp.Unspecified)
         // (360 - 20) * 0.78 = 265.2

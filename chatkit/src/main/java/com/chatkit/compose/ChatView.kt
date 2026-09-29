@@ -48,9 +48,11 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Reply
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -182,6 +184,7 @@ public fun ChatView(
     var isVoiceCancelArmed by remember(conversationId) { mutableStateOf(false) }
     var voiceDragOffset by remember(conversationId) { mutableFloatStateOf(0f) }
     var voiceVerticalDragOffset by remember(conversationId) { mutableFloatStateOf(0f) }
+    var voiceRecorderAlert by remember(conversationId) { mutableStateOf<Pair<String, String>?>(null) }
 
     var isViewingNewest by remember(conversationId) { mutableStateOf(true) }
     var unreadIncomingCount by remember(conversationId) { mutableIntStateOf(0) }
@@ -383,10 +386,12 @@ public fun ChatView(
     }
 
     fun startRecording(): Boolean {
-        onVoiceRecordTap()
-        dismissAttachmentPicker()
         val started = recorder.start()
         isRecording = started
+        if (!started) {
+            voiceRecorderAlert = "Recording Could Not Start" to
+                "Check microphone access and the selected audio input, then try again."
+        }
         return started
     }
 
@@ -395,11 +400,22 @@ public fun ChatView(
     ) { granted ->
         if (granted && startRecording()) {
             isVoiceRecordingLocked = true
-            isVoiceGestureActive = true
+            isVoiceGestureActive = false
+        } else {
+            isVoiceRecordingLocked = false
+            isVoiceGestureActive = false
+            isVoiceLockArmed = false
+            isVoiceCancelArmed = false
+            if (!granted) {
+                voiceRecorderAlert = "Microphone Access Required" to
+                    "Allow microphone access in Settings to record voice messages."
+            }
         }
     }
 
     fun ensureRecordingPermissionAndStart(): Boolean {
+        onVoiceRecordTap()
+        dismissAttachmentPicker()
         return if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
         ) {
@@ -892,6 +908,19 @@ public fun ChatView(
                 sessionKey = cameraSessionKey,
                 onDismiss = { isCameraPresented = false },
                 onCaptured = ::submitCameraCapture,
+            )
+        }
+
+        voiceRecorderAlert?.let { (title, message) ->
+            AlertDialog(
+                onDismissRequest = { voiceRecorderAlert = null },
+                title = { Text(title) },
+                text = { Text(message) },
+                confirmButton = {
+                    TextButton(onClick = { voiceRecorderAlert = null }) {
+                        Text("OK")
+                    }
+                },
             )
         }
     }

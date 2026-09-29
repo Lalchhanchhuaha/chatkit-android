@@ -27,31 +27,34 @@ internal class VoiceRecorder(private val context: Context) {
             return maxOf(0.08f, minOf(1f, normalized * 4f))
         }
 
-    fun start(): Boolean = runCatching {
-        val file = File.createTempFile("chatkit-voice-", ".m4a", context.cacheDir)
-        val mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            MediaRecorder(context)
-        } else {
-            @Suppress("DEPRECATION")
-            MediaRecorder()
+    fun start(): Boolean {
+        if (isRecording) return false
+        return runCatching {
+            val file = File.createTempFile("chatkit-voice-", ".m4a", context.cacheDir)
+            val mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(context)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+            mediaRecorder.apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioEncodingBitRate(96_000)
+                setAudioSamplingRate(44_100)
+                setOutputFile(file.absolutePath)
+                prepare()
+                start()
+            }
+            output = file
+            recorder = mediaRecorder
+            startedAt = System.currentTimeMillis()
+            true
+        }.getOrElse {
+            release(deleteOutput = true)
+            false
         }
-        mediaRecorder.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setAudioEncodingBitRate(96_000)
-            setAudioSamplingRate(44_100)
-            setOutputFile(file.absolutePath)
-            prepare()
-            start()
-        }
-        output = file
-        recorder = mediaRecorder
-        startedAt = System.currentTimeMillis()
-        true
-    }.getOrElse {
-        release(deleteOutput = true)
-        false
     }
 
     fun finish(): Recording? {

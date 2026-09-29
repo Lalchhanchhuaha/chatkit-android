@@ -11,6 +11,8 @@ internal object ChatBubbleMetrics {
     const val MaxWidthRatio: Float = 0.78f
     val HorizontalMargin: Dp = 20.dp
     val MinimumWidth: Dp = 120.dp
+    /** Matches iOS `voiceBubbleWidth`: voice notes stay compact on wide screens. */
+    val VoiceWidth: Dp = 252.dp
 
     /**
      * @param containerWidth Full transcript row width before bubble margins.
@@ -22,6 +24,8 @@ internal object ChatBubbleMetrics {
         if (themeMaximum == Dp.Unspecified || themeMaximum <= 0.dp) return ratioCap
         return minOf(themeMaximum, ratioCap).coerceAtLeast(MinimumWidth)
     }
+
+    fun voiceBubbleWidth(maximumWidth: Dp): Dp = minOf(VoiceWidth, maximumWidth)
 }
 
 /**

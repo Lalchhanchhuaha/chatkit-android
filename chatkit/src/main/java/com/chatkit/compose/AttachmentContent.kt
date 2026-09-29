@@ -1,10 +1,13 @@
 package com.chatkit.compose
 
+import android.content.Intent
 import android.net.Uri
 import android.util.LruCache
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
@@ -58,6 +61,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +83,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -94,6 +99,7 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 
@@ -195,7 +201,6 @@ internal fun DefaultAttachment(
             attachment = attachment,
             theme = theme,
             isIncoming = isIncoming,
-            automaticallyLoadsImages = automaticallyLoadsImages,
             attachmentResolver = attachmentResolver,
             onCancelUpload = onCancelUpload,
             onCancelDownload = onCancelDownload,
@@ -205,6 +210,7 @@ internal fun DefaultAttachment(
         else -> DocumentAttachmentRow(
             attachment = attachment,
             theme = theme,
+            attachmentResolver = attachmentResolver,
             onCancelUpload = onCancelUpload,
             onCancelDownload = onCancelDownload,
             onRetryAttachment = onRetryAttachment,
@@ -224,6 +230,7 @@ internal fun MessageAttachmentsContent(
     onCancelDownload: (ChatAttachment) -> Unit = {},
     onRetryAttachment: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController,
+    compactVoiceLayout: Boolean = false,
     onSingleImageBubbleWidthChanged: (Dp?) -> Unit = {},
 ) {
     val images = message.attachments.filter { it.isImage }
@@ -267,7 +274,12 @@ internal fun MessageAttachmentsContent(
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
                 .padding(
-                    top = if (images.isEmpty() && videos.isEmpty()) 0.dp else 5.dp,
+                    top = when {
+                        compactVoiceLayout && message.replyToMessageId == null -> 6.dp
+                        compactVoiceLayout -> 0.dp
+                        images.isEmpty() && videos.isEmpty() -> 0.dp
+                        else -> 5.dp
+                    },
                 ),
             verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
@@ -276,7 +288,6 @@ internal fun MessageAttachmentsContent(
                     attachment = attachment,
                     theme = theme,
                     isIncoming = message.isIncoming,
-                    automaticallyLoadsImages = automaticallyLoadsImages || !message.isIncoming,
                     attachmentResolver = attachmentResolver,
                     onCancelUpload = onCancelUpload,
                     onCancelDownload = onCancelDownload,
@@ -288,6 +299,7 @@ internal fun MessageAttachmentsContent(
                 DocumentAttachmentRow(
                     attachment = attachment,
                     theme = theme,
+                    attachmentResolver = attachmentResolver,
                     onCancelUpload = onCancelUpload,
                     onCancelDownload = onCancelDownload,
                     onRetryAttachment = onRetryAttachment,
@@ -708,18 +720,20 @@ private fun MediaAttachmentTile(
     var previewImageUri by remember { mutableStateOf<Uri?>(null) }
     var previewVideoUri by remember { mutableStateOf<Uri?>(null) }
     var retryToken by remember(attachment.id) { mutableStateOf(0) }
+    var manualDownloadRequested by remember(attachment.id) { mutableStateOf(false) }
+    var isResolving by remember(attachment.id) { mutableStateOf(false) }
+    var resolveProgress by remember(attachment.id) { mutableFloatStateOf(0f) }
     var resolveCancelled by remember(attachment.id, attachment.transferState, attachment.localUri) {
         mutableStateOf(attachment.transferState is TransferState.DownloadFailed)
     }
     var downloadCancelled by remember(attachment.id, attachment.transferState, attachment.localUri) {
         mutableStateOf(attachment.transferState is TransferState.DownloadFailed)
     }
-    var hasLocalResolvableContent by remember(
+    var hasLocalContent by remember(
         attachment.id,
         attachment.localUri,
-        attachment.posterUri,
     ) {
-        mutableStateOf(attachment.localUri != null || attachment.posterUri != null)
+        mutableStateOf(attachment.localUri != null)
     }
     var resolveExhausted by remember(attachment.id, retryToken) { mutableStateOf(false) }
     val resolvedUri by produceState<Uri?>(
@@ -728,39 +742,51 @@ private fun MediaAttachmentTile(
         attachment.transferState,
         attachment.id,
         automaticallyLoadsImages,
+        manualDownloadRequested,
         retryToken,
         resolveCancelled,
         downloadCancelled,
     ) {
         if (resolveCancelled || downloadCancelled) {
             resolveExhausted = true
+            isResolving = false
             value = null
             return@produceState
         }
         if (attachment.transferState is TransferState.DownloadFailed) {
             downloadCancelled = true
             resolveExhausted = true
+            isResolving = false
             value = null
             return@produceState
         }
         resolveExhausted = false
-        var result: Uri? = attachment.localUri
-        // Keep trying while the bubble is on screen. Media prefetch can lag behind
-        // the first compose (or fail once during a timeout) and previously left a
-        // permanent empty placeholder.
-        var attempt = 0
-        while (result == null && attempt < 12) {
-            if (resolveCancelled || downloadCancelled) break
-            val available = runCatching { attachmentResolver.isAvailableLocally(attachment) }.getOrDefault(false)
-            if (available) hasLocalResolvableContent = true
-            if (automaticallyLoadsImages || available || !attachment.isImage) {
-                result = runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
-            }
-            if (result != null || resolveCancelled || downloadCancelled) break
-            attempt += 1
-            delay((750L * attempt).coerceAtMost(5_000L))
+        val local = attachment.localUri
+        if (local != null) {
+            hasLocalContent = true
+            isResolving = false
+            value = local
+            return@produceState
         }
-        resolveExhausted = result == null && attachment.localUri == null
+        val available = runCatching {
+            attachmentResolver.isAvailableLocally(attachment)
+        }.getOrDefault(false)
+        hasLocalContent = available
+        if (!automaticallyLoadsImages && !available && !manualDownloadRequested) {
+            isResolving = false
+            value = null
+            return@produceState
+        }
+        isResolving = true
+        resolveProgress = 0f
+        val result = runCatching {
+            attachmentResolver.resolveContent(attachment) { progress ->
+                resolveProgress = progress.coerceIn(0f, 1f)
+            }
+        }.getOrNull()
+        isResolving = false
+        hasLocalContent = result != null
+        resolveExhausted = result == null
         value = result
     }
     val posterUri by produceState<Uri?>(attachment.posterUri, attachment.id, retryToken) {
@@ -772,7 +798,6 @@ private fun MediaAttachmentTile(
     // Prefer full media when present; fall back to poster so the bubble is never blank
     // while the host is still downloading/decrypting the full file.
     val displayUri = resolvedUri ?: posterUri
-    val hasLocalDisplaySource = hasLocalResolvableContent || displayUri != null
     val initialBitmap = remember(displayUri, resolvedUri, posterUri, isVideo) {
         val initialUri = posterUri ?: displayUri
         initialUri?.let { uri ->
@@ -870,30 +895,27 @@ private fun MediaAttachmentTile(
     val durationPadV = if (compact) 3.dp else 4.dp
     val durationInset = if (compact) 6.dp else 8.dp
     val transfer = attachment.transferState
-    val isTransferring = transfer.isTransferring
-    val hostFailed = transfer.isFailedTransfer
-    val baseFailed = hostFailed ||
-        (resolveCancelled && bitmap == null) ||
-        (downloadCancelled && bitmap == null) ||
-        (resolveExhausted && bitmap == null && posterUri == null)
-    val waitingForMedia = !isTransferring &&
-        !hasLocalDisplaySource &&
-        !baseFailed &&
-        bitmap == null &&
-        !(resolveExhausted && posterUri == null)
+    val waitingForManualDownload = transfer is TransferState.Uploaded &&
+        resolvedUri == null &&
+        !hasLocalContent &&
+        !automaticallyLoadsImages &&
+        !manualDownloadRequested &&
+        !isResolving &&
+        !resolveExhausted &&
+        !resolveCancelled &&
+        !downloadCancelled
     val effectiveTransfer = when {
         transfer is TransferState.Failed || transfer is TransferState.DownloadFailed -> transfer
-        resolveCancelled && bitmap == null -> TransferState.DownloadFailed
-        downloadCancelled && bitmap == null -> TransferState.DownloadFailed
-        // After resolve attempts are exhausted, prefer a download affordance over an
-        // indefinite spinner even if the host still reports Downloading — but only when
-        // there is also no poster to show (WhatsApp keeps the thumb visible).
-        resolveExhausted && bitmap == null && posterUri == null -> TransferState.DownloadFailed
+        resolveCancelled -> TransferState.DownloadFailed
+        downloadCancelled -> TransferState.DownloadFailed
         transfer is TransferState.Uploading -> transfer
-        transfer is TransferState.Downloading && !hasLocalDisplaySource -> transfer
-        waitingForMedia -> TransferState.Downloading(0f)
+        transfer is TransferState.Downloading -> transfer
+        isResolving -> TransferState.Downloading(resolveProgress)
+        resolveExhausted -> TransferState.DownloadFailed
         else -> transfer
     }
+    val isTransferring = effectiveTransfer.isTransferring
+    val transferFailed = effectiveTransfer.isFailedTransfer
 
     Box(
         modifier = Modifier
@@ -902,11 +924,16 @@ private fun MediaAttachmentTile(
             .clip(MediaTileShape)
             .then(if (isBlurred) Modifier.blur(9.dp).scale(1.08f) else Modifier)
             .background(if (isVideo) Color.Black.copy(alpha = 0.78f) else theme.thumbnailPlaceholderBackgroundColor)
-            .clickable(enabled = openPreviewOnTap && !isTransferring && !hostFailed) {
+            .clickable(enabled = openPreviewOnTap && !isTransferring && !transferFailed) {
+                if (waitingForManualDownload) {
+                    manualDownloadRequested = true
+                    return@clickable
+                }
                 if (isVideo) {
                     val videoUri = resolvedUri
                     if (videoUri == null) {
                         // Poster-only: retry full download instead of opening externally.
+                        manualDownloadRequested = true
                         retryToken += 1
                         return@clickable
                     }
@@ -916,6 +943,7 @@ private fun MediaAttachmentTile(
                 val openUri = resolvedUri ?: posterUri
                 if (openUri == null) {
                     // Tap empty placeholder to force another download attempt.
+                    manualDownloadRequested = true
                     retryToken += 1
                     return@clickable
                 }
@@ -930,7 +958,7 @@ private fun MediaAttachmentTile(
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
-        } else if (isVideo && !effectiveTransfer.isTransferring && !effectiveTransfer.isFailedTransfer && !waitingForMedia) {
+        } else if (isVideo && !isTransferring && !transferFailed && !waitingForManualDownload) {
             Icon(
                 imageVector = Icons.Default.Videocam,
                 contentDescription = null,
@@ -939,7 +967,9 @@ private fun MediaAttachmentTile(
             )
         }
 
-        if (showsPlayControl && isVideo && !isTransferring && !effectiveTransfer.isFailedTransfer && bitmap != null) {
+        if (showsPlayControl && isVideo && !isTransferring && !transferFailed &&
+            !waitingForManualDownload && bitmap != null
+        ) {
             Box(
                 modifier = Modifier
                     .size(playSize)
@@ -971,6 +1001,15 @@ private fun MediaAttachmentTile(
             )
         }
 
+        if (waitingForManualDownload) {
+            AttachmentDownloadBadge(
+                progress = null,
+                size = if (compact) 36.dp else 46.dp,
+                iconSize = if (compact) 16.dp else 20.dp,
+                onClick = { manualDownloadRequested = true },
+            )
+        }
+
         AttachmentTransferOverlay(
             transferState = effectiveTransfer,
             theme = theme,
@@ -991,6 +1030,7 @@ private fun MediaAttachmentTile(
             onRetry = {
                 resolveCancelled = false
                 downloadCancelled = false
+                manualDownloadRequested = true
                 onRetryAttachment(attachment)
                 if (effectiveTransfer !is TransferState.Failed) {
                     retryToken += 1
@@ -1516,23 +1556,19 @@ internal fun VoiceMessageRow(
     attachment: ChatAttachment,
     theme: ChatTheme,
     isIncoming: Boolean,
-    automaticallyLoadsImages: Boolean,
     attachmentResolver: AttachmentResolver,
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit = {},
     onRetryAttachment: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController,
 ) {
-    var retryToken by remember(attachment.id) { mutableStateOf(0) }
     var downloadCancelled by remember(attachment.id) { mutableStateOf(false) }
-    val resolvedUri by produceState<Uri?>(attachment.localUri, attachment.id, automaticallyLoadsImages, retryToken) {
-        val local = attachment.localUri
-        if (local != null) {
-            value = local
-            return@produceState
-        }
-        value = runCatching { attachmentResolver.resolveContent(attachment) }.getOrNull()
+    var resolvedUri by remember(attachment.id, attachment.localUri) {
+        mutableStateOf(attachment.localUri)
     }
+    var isLoading by remember(attachment.id) { mutableStateOf(false) }
+    var downloadProgress by remember(attachment.id) { mutableFloatStateOf(0f) }
+    val coroutineScope = rememberCoroutineScope()
     val isActive = audioPlayer.activeAttachmentId == attachment.id
     val isPlaying = isActive && audioPlayer.isPlaying
     val progress = if (isActive) audioPlayer.progress else 0f
@@ -1544,9 +1580,9 @@ internal fun VoiceMessageRow(
         isActive -> audioPlayer.durationMillis
         else -> knownDuration
     }
-    // White control fill keeps play/pause readable on both incoming and outgoing bubbles.
-    val playFill = theme.accentContentColor.copy(alpha = 0.92f)
-    val playIcon = theme.accentColor
+    // iOS uses the accent control on incoming bubbles and reverses it on outgoing ones.
+    val playFill = if (isIncoming) theme.accentColor else theme.accentContentColor.copy(alpha = 0.92f)
+    val playIcon = if (isIncoming) theme.accentContentColor else theme.accentColor
     val waveActive = if (isIncoming) theme.accentColor else theme.accentContentColor
     val waveInactive = if (isIncoming) {
         theme.incomingTimestampColor.copy(alpha = 0.35f)
@@ -1559,12 +1595,32 @@ internal fun VoiceMessageRow(
             TransferState.DownloadFailed
         else -> attachment.transferState
     }
+    val playOrResolve = {
+        val uri = resolvedUri
+        if (uri != null) {
+            audioPlayer.toggle(attachment.id, uri, knownDuration)
+        } else if (!isLoading) {
+            coroutineScope.launch {
+                isLoading = true
+                downloadProgress = 0f
+                val result = runCatching {
+                    attachmentResolver.resolveContent(attachment) { progress ->
+                        downloadProgress = progress.coerceIn(0f, 1f)
+                    }
+                }.getOrNull()
+                resolvedUri = result
+                isLoading = false
+                if (result != null) {
+                    audioPlayer.toggle(attachment.id, result, knownDuration)
+                }
+            }
+        }
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .widthIn(min = 220.dp)
-            .padding(top = 4.dp)
+            .height(34.dp)
             .semantics {
                 contentDescription = "Voice message, ${formatAttachmentDuration(knownDuration)}"
             },
@@ -1573,7 +1629,7 @@ internal fun VoiceMessageRow(
     ) {
         Box(
             modifier = Modifier
-                .size(28.dp)
+                .size(32.dp)
                 .clip(CircleShape)
                 .background(playFill)
                 .clickable {
@@ -1586,15 +1642,9 @@ internal fun VoiceMessageRow(
                         TransferState.Failed -> onRetryAttachment(attachment)
                         TransferState.DownloadFailed -> {
                             downloadCancelled = false
-                            retryToken += 1
+                            onRetryAttachment(attachment)
                         }
-                        TransferState.Uploaded -> {
-                            val uri = resolvedUri ?: run {
-                                retryToken += 1
-                                return@clickable
-                            }
-                            audioPlayer.toggle(attachment.id, uri, knownDuration)
-                        }
+                        TransferState.Uploaded -> playOrResolve()
                     }
                 },
             contentAlignment = Alignment.Center,
@@ -1603,7 +1653,7 @@ internal fun VoiceMessageRow(
                 is TransferState.Uploading -> {
                     CircularProgressIndicator(
                         progress = { transfer.progress.coerceIn(0.04f, 1f) },
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(32.dp),
                         color = playIcon,
                         strokeWidth = 2.5.dp,
                     )
@@ -1617,7 +1667,7 @@ internal fun VoiceMessageRow(
                 is TransferState.Downloading -> {
                     CircularProgressIndicator(
                         progress = { transfer.progress.coerceIn(0.04f, 1f) },
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(32.dp),
                         color = playIcon,
                         strokeWidth = 2.5.dp,
                     )
@@ -1641,12 +1691,12 @@ internal fun VoiceMessageRow(
                     modifier = Modifier.size(16.dp),
                 )
                 TransferState.Uploaded -> {
-                    if (resolvedUri == null) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "Download voice message",
-                            tint = playIcon,
-                            modifier = Modifier.size(16.dp),
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            progress = { downloadProgress.coerceIn(0.04f, 1f) },
+                            modifier = Modifier.size(32.dp),
+                            color = playIcon,
+                            strokeWidth = 2.5.dp,
                         )
                     } else {
                         Icon(
@@ -1666,7 +1716,7 @@ internal fun VoiceMessageRow(
             inactiveColor = waveInactive,
             modifier = Modifier
                 .weight(1f)
-                .height(28.dp),
+                .height(22.dp),
         )
 
         Text(
@@ -1674,6 +1724,7 @@ internal fun VoiceMessageRow(
             color = timestampColor,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
+            textAlign = TextAlign.End,
             modifier = Modifier.widthIn(min = 32.dp),
         )
     }
@@ -1708,10 +1759,18 @@ private fun AudioWaveform(
 private fun DocumentAttachmentRow(
     attachment: ChatAttachment,
     theme: ChatTheme,
+    attachmentResolver: AttachmentResolver,
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit = {},
     onRetryAttachment: (ChatAttachment) -> Unit = {},
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var resolvedUri by remember(attachment.id, attachment.localUri) {
+        mutableStateOf(attachment.localUri)
+    }
+    var isLoading by remember(attachment.id) { mutableStateOf(false) }
+    var progress by remember(attachment.id) { mutableFloatStateOf(0f) }
     var downloadCancelled by remember(attachment.id) { mutableStateOf(false) }
     val displayTransfer = when {
         downloadCancelled && attachment.transferState is TransferState.Downloading ->
@@ -1724,6 +1783,7 @@ private fun DocumentAttachmentRow(
             .height(56.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(theme.thumbnailPlaceholderBackgroundColor),
+        contentAlignment = Alignment.Center,
     ) {
         Row(
             modifier = Modifier
@@ -1748,6 +1808,52 @@ private fun DocumentAttachmentRow(
                 fontSize = 14.sp,
             )
         }
+        val openOrDownload: () -> Unit = {
+            val uri = resolvedUri
+            if (uri != null) {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW)
+                            .setDataAndType(uri, attachment.mimeType ?: "*/*")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                    )
+                }
+            } else if (!isLoading) {
+                scope.launch {
+                    isLoading = true
+                    progress = 0f
+                    resolvedUri = runCatching {
+                        attachmentResolver.resolveContent(attachment) {
+                            progress = it.coerceIn(0f, 1f)
+                        }
+                    }.getOrNull()
+                    isLoading = false
+                }
+            }
+            Unit
+        }
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clickable(
+                    enabled = attachment.transferState !is TransferState.Uploading &&
+                        attachment.transferState !is TransferState.Downloading,
+                    onClick = openOrDownload,
+                ),
+        )
+        if (isLoading) {
+            AttachmentDownloadBadge(
+                progress = progress,
+                size = 46.dp,
+                iconSize = 20.dp,
+            )
+        } else if (resolvedUri == null && attachment.transferState is TransferState.Uploaded) {
+            AttachmentDownloadBadge(
+                progress = null,
+                size = 36.dp,
+                iconSize = 18.dp,
+            )
+        }
         AttachmentTransferOverlay(
             transferState = displayTransfer,
             theme = theme,
@@ -1769,9 +1875,58 @@ private fun DocumentAttachmentRow(
                     else -> onRetryAttachment(attachment)
                 }
             },
-            compact = true,
         )
     }
+}
+
+/** iOS-style centered download affordance: arrow before download, ring while loading. */
+@Composable
+private fun AttachmentDownloadBadge(
+    progress: Float?,
+    size: Dp,
+    iconSize: Dp,
+    onClick: (() -> Unit)? = null,
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.58f))
+            .then(onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (progress != null) {
+            AttachmentProgressIndicator(
+                progress = progress,
+                modifier = Modifier.size(size - 10.dp),
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Download,
+                contentDescription = "Download attachment",
+                tint = Color.White,
+                modifier = Modifier.size(iconSize),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AttachmentProgressIndicator(
+    progress: Float,
+    modifier: Modifier = Modifier,
+) {
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress.coerceIn(0.04f, 1f),
+        animationSpec = tween(250),
+        label = "attachment-progress",
+    )
+    CircularProgressIndicator(
+        progress = { animatedProgress },
+        modifier = modifier,
+        color = Color.White,
+        strokeWidth = 3.dp,
+    )
 }
 
 @Composable
@@ -1780,11 +1935,10 @@ private fun AttachmentTransferOverlay(
     theme: ChatTheme,
     onCancel: () -> Unit,
     onRetry: () -> Unit = {},
-    compact: Boolean = false,
 ) {
-    val controlSize = if (compact) 36.dp else 52.dp
-    val iconSize = if (compact) 20.dp else 28.dp
-    val cancelIconSize = if (compact) 18.dp else 24.dp
+    val controlSize = 46.dp
+    val iconSize = 20.dp
+    val cancelIconSize = 14.dp
     when (transferState) {
         is TransferState.Uploading -> {
             Box(
@@ -1794,12 +1948,10 @@ private fun AttachmentTransferOverlay(
                     .clickable(onClick = onCancel),
                 contentAlignment = Alignment.Center,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        progress = { transferState.progress.coerceIn(0.04f, 1f) },
-                        modifier = Modifier.size(if (compact) 28.dp else 46.dp),
-                        color = Color.White,
-                        strokeWidth = 3.dp,
+                    Box(contentAlignment = Alignment.Center) {
+                        AttachmentProgressIndicator(
+                            progress = transferState.progress,
+                            modifier = Modifier.size(46.dp),
                     )
                     Icon(
                         imageVector = Icons.Default.Close,
@@ -1814,25 +1966,15 @@ private fun AttachmentTransferOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.38f))
                     .clickable(onClick = onCancel),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    if (transferState.progress > 0f) {
-                        CircularProgressIndicator(
-                            progress = { transferState.progress.coerceIn(0.04f, 1f) },
-                            modifier = Modifier.size(if (compact) 28.dp else 46.dp),
-                            color = Color.White,
-                            strokeWidth = 3.dp,
-                        )
-                    } else {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(if (compact) 28.dp else 46.dp),
-                            color = Color.White,
-                            strokeWidth = 3.dp,
-                        )
-                    }
+                    AttachmentDownloadBadge(
+                        progress = transferState.progress.coerceAtLeast(0.04f),
+                        size = controlSize,
+                        iconSize = iconSize,
+                    )
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Cancel download",
@@ -1870,7 +2012,6 @@ private fun AttachmentTransferOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.38f))
                     .clickable(onClick = onRetry),
                 contentAlignment = Alignment.Center,
             ) {

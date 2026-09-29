@@ -490,6 +490,8 @@ internal fun MessageBubble(
     )
     val swipeProgress = MessageSwipeToReply.progress(swipeOffset, replyThreshold)
     val hasMedia = message.attachments.any { it.isImage || it.isVideo || it.isAudio }
+    val isVoicePrimaryBubble = message.attachments.any(ChatAttachment::isAudio) &&
+        message.attachments.all(ChatAttachment::isAudio)
     val sideInset = if (hasMedia) 20.dp else 56.dp
     val trimmedText = message.text.trim()
     val hasText = trimmedText.isNotEmpty()
@@ -641,6 +643,7 @@ internal fun MessageBubble(
                 singleImageBubbleWidth ?: maxBubble,
                 captionLayout?.bubbleWidth ?: ChatBubbleMetrics.MinimumWidth,
             )
+            isVoicePrimaryBubble -> ChatBubbleMetrics.voiceBubbleWidth(maxBubble)
             captionLayout != null -> captionLayout.bubbleWidth
             hasMedia -> maxBubble
             else -> ChatBubbleMetrics.MinimumWidth
@@ -741,7 +744,10 @@ internal fun MessageBubble(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = if (hasMediaAttachments) 6.dp else 8.dp)
-                                .padding(top = if (hasMediaAttachments) 5.dp else 8.dp, bottom = 4.dp),
+                                .padding(
+                                    top = if (hasMediaAttachments) 5.dp else 8.dp,
+                                    bottom = if (isVoicePrimaryBubble) 2.dp else 4.dp,
+                                ),
                         )
                     }
                     if (attachmentContent != null) {
@@ -784,20 +790,25 @@ internal fun MessageBubble(
                                 onCancelDownload = onCancelAttachmentDownload,
                                 onRetryAttachment = onRetryAttachmentDownload,
                                 audioPlayer = audioPlayer,
+                                compactVoiceLayout = isVoicePrimaryBubble,
                                 onSingleImageBubbleWidthChanged = {},
                             )
                         }
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 10.dp, end = 12.dp)
+                                .padding(
+                                    start = if (isVoicePrimaryBubble) 8.dp else 10.dp,
+                                    end = if (isVoicePrimaryBubble) 8.dp else 12.dp,
+                                )
                                 .padding(
                                     top = when {
+                                        isVoicePrimaryBubble -> 2.dp
                                         !hasMediaAttachments && message.replyToMessageId == null -> 6.dp
                                         hasText || !hasMediaAttachments -> 5.dp
                                         else -> 2.dp
                                     },
-                                    bottom = 5.dp,
+                                    bottom = if (isVoicePrimaryBubble) 4.dp else 5.dp,
                                 ),
                         ) {
                             MessageBubbleCaptionOrFooter(

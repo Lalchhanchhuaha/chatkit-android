@@ -2,6 +2,7 @@ package com.chatkit.compose
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -37,16 +38,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -59,6 +59,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -69,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.max
@@ -79,6 +81,37 @@ private val CancelArmDp = 40.dp
 private val InstantCancelDp = 110.dp
 private val LockArmDp = 50.dp
 private const val WaveformBarCount = 24
+
+internal data class VoiceGestureDecision(
+    val dragX: Float,
+    val dragY: Float,
+    val cancelArmed: Boolean,
+    val lockArmed: Boolean,
+    val cancelsImmediately: Boolean,
+)
+
+/** iOS ChatKit's direction-aware cancel/lock thresholds, kept pure for regression tests. */
+internal fun voiceGestureDecision(
+    dragX: Float,
+    dragY: Float,
+    cancelArmPx: Float,
+    lockArmPx: Float,
+    instantCancelPx: Float,
+): VoiceGestureDecision {
+    val horizontal = dragX.coerceAtMost(0f)
+    val vertical = dragY.coerceAtMost(0f)
+    val absX = abs(horizontal)
+    val absY = abs(vertical)
+    val cancelDominant = horizontal <= -cancelArmPx && absX >= absY * 0.65f
+    val lockDominant = vertical <= -lockArmPx && absY > absX && !cancelDominant
+    return VoiceGestureDecision(
+        dragX = horizontal,
+        dragY = vertical,
+        cancelArmed = cancelDominant,
+        lockArmed = lockDominant,
+        cancelsImmediately = horizontal <= -instantCancelPx,
+    )
+}
 
 /**
  * Trailing mic control matching iOS ChatKit:
@@ -110,9 +143,18 @@ internal fun VoiceMicButton(
     val lockArmPx = with(density) { LockArmDp.toPx() }
     val scale by animateFloatAsState(
         targetValue = if (isActive) 1.16f else 1f,
-        animationSpec = tween(180),
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 650f),
         label = "mic-scale",
     )
+    val currentOnGestureActiveChanged by rememberUpdatedState(onGestureActiveChanged)
+    val currentOnCancelArmedChanged by rememberUpdatedState(onCancelArmedChanged)
+    val currentOnLockArmedChanged by rememberUpdatedState(onLockArmedChanged)
+    val currentOnDragOffsetChanged by rememberUpdatedState(onDragOffsetChanged)
+    val currentOnVerticalDragOffsetChanged by rememberUpdatedState(onVerticalDragOffsetChanged)
+    val currentOnPressStart by rememberUpdatedState(onPressStart)
+    val currentOnCancel by rememberUpdatedState(onCancel)
+    val currentOnLock by rememberUpdatedState(onLock)
+    val currentOnFinish by rememberUpdatedState(onFinish)
 
     Box(
         modifier = modifier
@@ -135,93 +177,103 @@ internal fun VoiceMicButton(
                     val down = awaitFirstDown(requireUnconsumed = false)
                     down.consume()
 
-                    var gestureCancelled = false
-                    var cancelArmed = false
-                    var lockArmed = false
+                    var recordingStarted = false
+                    var actionCompleted = false
+                    var releasedNormally = false
+                    var decision = voiceGestureDecision(
+                        dragX = 0f,
+                        dragY = 0f,
+                        cancelArmPx = cancelArmPx,
+                        lockArmPx = lockArmPx,
+                        instantCancelPx = instantCancelPx,
+                    )
                     var wasCancelArmed = false
                     var wasLockArmed = false
                     var dragX = 0f
                     var dragY = 0f
 
-                    onGestureActiveChanged(true)
-                    onDragOffsetChanged(0f)
-                    onVerticalDragOffsetChanged(0f)
-                    onCancelArmedChanged(false)
-                    onLockArmedChanged(false)
+                    currentOnGestureActiveChanged(true)
+                    currentOnDragOffsetChanged(0f)
+                    currentOnVerticalDragOffsetChanged(0f)
+                    currentOnCancelArmedChanged(false)
+                    currentOnLockArmedChanged(false)
 
-                    if (!onPressStart()) {
-                        onGestureActiveChanged(false)
-                        return@awaitEachGesture
-                    }
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    try {
+                        recordingStarted = currentOnPressStart()
+                        if (!recordingStarted) return@awaitEachGesture
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
 
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (change.changedToUp()) {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null) break
+                            if (!change.pressed) {
+                                releasedNormally = change.changedToUp()
+                                change.consume()
+                                break
+                            }
+
+                            val delta = change.positionChange()
+                            dragX += delta.x
+                            dragY += delta.y
                             change.consume()
-                            break
-                        }
-                        if (gestureCancelled) {
-                            change.consume()
-                            continue
+
+                            decision = voiceGestureDecision(
+                                dragX = dragX,
+                                dragY = dragY,
+                                cancelArmPx = cancelArmPx,
+                                lockArmPx = lockArmPx,
+                                instantCancelPx = instantCancelPx,
+                            )
+                            currentOnDragOffsetChanged(decision.dragX)
+                            currentOnVerticalDragOffsetChanged(decision.dragY)
+                            currentOnCancelArmedChanged(decision.cancelArmed)
+                            currentOnLockArmedChanged(decision.lockArmed)
+
+                            if (decision.cancelArmed && !wasCancelArmed) {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                            if (decision.lockArmed && !wasLockArmed) {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                            wasCancelArmed = decision.cancelArmed
+                            wasLockArmed = decision.lockArmed
+
+                            if (decision.cancelsImmediately) {
+                                currentOnCancelArmedChanged(true)
+                                currentOnCancel()
+                                actionCompleted = true
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                break
+                            }
                         }
 
-                        val delta = change.positionChange()
-                        dragX = (dragX + delta.x).coerceAtMost(0f)
-                        dragY = (dragY + delta.y).coerceAtMost(0f)
-                        change.consume()
-
-                        val absX = abs(dragX)
-                        val absY = abs(dragY)
-                        val leftEnoughToCancel = dragX <= -cancelArmPx
-                        val upEnoughToLock = dragY <= -lockArmPx
-                        val cancelDominant = leftEnoughToCancel && absX >= absY * 0.65f
-                        val lockDominant = upEnoughToLock && absY > absX && !cancelDominant
-
-                        onDragOffsetChanged(dragX)
-                        onVerticalDragOffsetChanged(dragY)
-                        cancelArmed = cancelDominant
-                        lockArmed = lockDominant
-                        onCancelArmedChanged(cancelArmed)
-                        onLockArmedChanged(lockArmed)
-
-                        if (cancelArmed && !wasCancelArmed) {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (!actionCompleted) {
+                            when {
+                                !releasedNormally -> currentOnCancel()
+                                decision.cancelArmed -> {
+                                    currentOnCancel()
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                }
+                                decision.lockArmed -> {
+                                    currentOnLock()
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                }
+                                else -> currentOnFinish()
+                            }
+                            actionCompleted = true
                         }
-                        if (lockArmed && !wasLockArmed) {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    } catch (cancelled: CancellationException) {
+                        if (recordingStarted && !actionCompleted) {
+                            currentOnCancel()
                         }
-                        wasCancelArmed = cancelArmed
-                        wasLockArmed = lockArmed
-
-                        if (dragX <= -instantCancelPx) {
-                            gestureCancelled = true
-                            cancelArmed = true
-                            onCancelArmedChanged(true)
-                            onCancel()
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            break
-                        }
-                    }
-
-                    onDragOffsetChanged(0f)
-                    onVerticalDragOffsetChanged(0f)
-                    onCancelArmedChanged(false)
-                    onLockArmedChanged(false)
-                    onGestureActiveChanged(false)
-
-                    if (gestureCancelled) return@awaitEachGesture
-                    when {
-                        cancelArmed -> {
-                            onCancel()
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        }
-                        lockArmed -> {
-                            onLock()
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        }
-                        else -> onFinish()
+                        throw cancelled
+                    } finally {
+                        currentOnDragOffsetChanged(0f)
+                        currentOnVerticalDragOffsetChanged(0f)
+                        currentOnCancelArmedChanged(false)
+                        currentOnLockArmedChanged(false)
+                        currentOnGestureActiveChanged(false)
                     }
                 }
             },
@@ -231,13 +283,13 @@ internal fun VoiceMicButton(
             Modifier
                 .size(36.dp)
                 .clip(CircleShape)
-                .background(theme.composerButtonBackgroundColor),
+                .background(theme.accentColor),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painter = painterResource(R.drawable.mic),
                 contentDescription = null,
-                tint = theme.composerIconColor,
+                tint = theme.accentContentColor,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -385,7 +437,7 @@ internal fun LockedVoiceRecordingStatus(
             Modifier
                 .size(36.dp)
                 .clip(CircleShape)
-                .background(theme.composerButtonBackgroundColor)
+                .background(theme.accentColor)
                 .clickable(onClick = onSend)
                 .semantics { contentDescription = "Send voice recording" },
             contentAlignment = Alignment.Center,
@@ -393,7 +445,7 @@ internal fun LockedVoiceRecordingStatus(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.Send,
                 contentDescription = null,
-                tint = theme.composerIconColor,
+                tint = theme.accentContentColor,
                 modifier = Modifier.size(16.dp),
             )
         }
