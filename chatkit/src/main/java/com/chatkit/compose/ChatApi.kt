@@ -21,6 +21,11 @@ public data class ChatConfig(
     public val allowMultipleDocuments: Boolean = true,
     public val acceptedDocumentMimeTypes: List<String> = listOf("*/*"),
     public val automaticallyLoadIncomingImages: Boolean = true,
+    /**
+     * When true, explicitly downloaded incoming photos and videos are copied into
+     * the device gallery (Pictures/Lungdi or Movies/Lungdi). Matches iOS ChatKit.
+     */
+    public val automaticallySavesDownloadedMediaToPhotos: Boolean = false,
     public val maximumMediaSelection: Int = 10,
     /**
      * Legacy TakePicture URI. Ignored: camera capture now uses an in-app CameraX
@@ -137,6 +142,7 @@ public fun ChatScreen(
         allowsMultipleDocumentSelection = config.allowMultipleDocuments,
         documentMimeTypes = config.acceptedDocumentMimeTypes,
         automaticallyLoadsImages = config.automaticallyLoadIncomingImages,
+        automaticallySavesDownloadedMediaToPhotos = config.automaticallySavesDownloadedMediaToPhotos,
         maximumMediaSelection = config.maximumMediaSelection.coerceAtLeast(1),
         cameraCaptureUri = legacyCameraUri,
         enableCameraCapture = config.enableCameraCapture,

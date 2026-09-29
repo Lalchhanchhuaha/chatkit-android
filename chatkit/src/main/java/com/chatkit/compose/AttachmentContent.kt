@@ -164,6 +164,7 @@ internal fun DefaultAttachment(
     theme: ChatTheme,
     isIncoming: Boolean = true,
     automaticallyLoadsImages: Boolean = true,
+    automaticallySavesDownloadedMediaToPhotos: Boolean = false,
     attachmentResolver: AttachmentResolver = AttachmentResolver.None,
     onCancelUpload: (ChatAttachment) -> Unit = {},
     onCancelDownload: (ChatAttachment) -> Unit = {},
@@ -179,6 +180,7 @@ internal fun DefaultAttachment(
             isVideo = false,
             compact = false,
             automaticallyLoadsImages = automaticallyLoadsImages,
+            automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
             attachmentResolver = attachmentResolver,
             onCancelUpload = onCancelUpload,
             onCancelDownload = onCancelDownload,
@@ -192,6 +194,7 @@ internal fun DefaultAttachment(
             isVideo = true,
             compact = false,
             automaticallyLoadsImages = automaticallyLoadsImages,
+            automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
             attachmentResolver = attachmentResolver,
             onCancelUpload = onCancelUpload,
             onCancelDownload = onCancelDownload,
@@ -225,6 +228,7 @@ internal fun MessageAttachmentsContent(
     theme: ChatTheme,
     maxBubbleWidth: Dp,
     automaticallyLoadsImages: Boolean,
+    automaticallySavesDownloadedMediaToPhotos: Boolean,
     attachmentResolver: AttachmentResolver,
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit = {},
@@ -247,6 +251,7 @@ internal fun MessageAttachmentsContent(
             isVideo = false,
             topPadding = 4.dp,
             automaticallyLoadsImages = automaticallyLoadsImages,
+            automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
             attachmentResolver = attachmentResolver,
             onCancelUpload = onCancelUpload,
             onCancelDownload = onCancelDownload,
@@ -262,6 +267,7 @@ internal fun MessageAttachmentsContent(
             isVideo = true,
             topPadding = if (images.isEmpty()) 4.dp else 0.dp,
             automaticallyLoadsImages = automaticallyLoadsImages,
+            automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
             attachmentResolver = attachmentResolver,
             onCancelUpload = onCancelUpload,
             onCancelDownload = onCancelDownload,
@@ -317,6 +323,7 @@ private fun MediaAttachmentGrid(
     isVideo: Boolean,
     topPadding: Dp,
     automaticallyLoadsImages: Boolean,
+    automaticallySavesDownloadedMediaToPhotos: Boolean,
     attachmentResolver: AttachmentResolver,
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit,
@@ -363,6 +370,7 @@ private fun MediaAttachmentGrid(
                 isVideo = isVideo,
                 compact = false,
                 automaticallyLoadsImages = automaticallyLoadsImages,
+                automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
                 attachmentResolver = attachmentResolver,
                 onCancelUpload = onCancelUpload,
                 onCancelDownload = onCancelDownload,
@@ -393,6 +401,7 @@ private fun MediaAttachmentGrid(
                                     isOverflowTile = index == 3 && overflowCount > 0,
                                     overflowCount = overflowCount,
                                     automaticallyLoadsImages = automaticallyLoadsImages,
+                                    automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
                                     attachmentResolver = attachmentResolver,
                                     onCancelUpload = onCancelUpload,
                                     onCancelDownload = onCancelDownload,
@@ -411,6 +420,7 @@ private fun MediaAttachmentGrid(
             attachments = attachments,
             isVideo = isVideo,
             automaticallyLoadsImages = automaticallyLoadsImages,
+            automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
             attachmentResolver = attachmentResolver,
             onDismiss = { showAlbumGallery = false },
         )
@@ -426,6 +436,7 @@ private fun MediaGridCell(
     isOverflowTile: Boolean,
     overflowCount: Int,
     automaticallyLoadsImages: Boolean,
+    automaticallySavesDownloadedMediaToPhotos: Boolean,
     attachmentResolver: AttachmentResolver,
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit,
@@ -448,6 +459,7 @@ private fun MediaGridCell(
             showsPlayControl = isVideo && !isOverflowTile,
             openPreviewOnTap = !isOverflowTile,
             automaticallyLoadsImages = automaticallyLoadsImages,
+            automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
             attachmentResolver = attachmentResolver,
             onCancelUpload = onCancelUpload,
             onCancelDownload = onCancelDownload,
@@ -483,6 +495,7 @@ private fun MediaAlbumGallery(
     attachments: List<ChatAttachment>,
     isVideo: Boolean,
     automaticallyLoadsImages: Boolean,
+    automaticallySavesDownloadedMediaToPhotos: Boolean,
     attachmentResolver: AttachmentResolver,
     onDismiss: () -> Unit,
 ) {
@@ -551,6 +564,7 @@ private fun MediaAlbumGallery(
                         attachment = attachment,
                         isVideo = isVideo,
                         automaticallyLoadsImages = automaticallyLoadsImages,
+                        automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
                         attachmentResolver = attachmentResolver,
                         onOpen = { uri ->
                             if (isVideo) {
@@ -588,6 +602,7 @@ private fun MediaAlbumGalleryRow(
     attachment: ChatAttachment,
     isVideo: Boolean,
     automaticallyLoadsImages: Boolean,
+    automaticallySavesDownloadedMediaToPhotos: Boolean,
     attachmentResolver: AttachmentResolver,
     onOpen: (Uri) -> Unit,
 ) {
@@ -710,6 +725,7 @@ private fun MediaAttachmentTile(
     showsPlayControl: Boolean = true,
     openPreviewOnTap: Boolean = true,
     automaticallyLoadsImages: Boolean,
+    automaticallySavesDownloadedMediaToPhotos: Boolean,
     attachmentResolver: AttachmentResolver,
     onCancelUpload: (ChatAttachment) -> Unit,
     onCancelDownload: (ChatAttachment) -> Unit = {},
@@ -1036,6 +1052,21 @@ private fun MediaAttachmentTile(
                     retryToken += 1
                 }
             },
+        )
+    }
+
+    LaunchedEffect(
+        resolvedUri,
+        manualDownloadRequested,
+        automaticallySavesDownloadedMediaToPhotos,
+        attachment.id,
+    ) {
+        val uri = resolvedUri ?: return@LaunchedEffect
+        if (!automaticallySavesDownloadedMediaToPhotos || !manualDownloadRequested) return@LaunchedEffect
+        ReceivedAttachmentMediaStoreSaver.saveIfNeeded(
+            context = context,
+            attachment = attachment,
+            sourceUri = uri,
         )
     }
 
