@@ -125,10 +125,8 @@ private val AttachmentPreviewCache = object : LruCache<String, ImageBitmap>(
             .toInt()
 }
 
-/** Host aspect ratio, else a stable media-kind fallback so the bubble isn't a square stub. */
-private fun ChatAttachment.resolvedDisplayAspectRatio(isVideo: Boolean): Float? =
+private fun ChatAttachment.hostAspectRatioOrNull(): Float? =
     aspectRatio?.takeIf { it.isFinite() && it > 0f }
-        ?: if (isVideo) 16f / 9f else 4f / 3f
 
 private fun mediaTileSizeForAspect(aspect: Float, mediaWidth: Dp): Pair<Dp, Dp> {
     val safeAspect = aspect.coerceAtLeast(0.05f)
@@ -141,6 +139,32 @@ private fun mediaTileSizeForAspect(aspect: Float, mediaWidth: Dp): Pair<Dp, Dp> 
             maxOf(SingleMediaMinimumHeight, mediaWidth / safeAspect),
         )
     }
+}
+
+/**
+ * Measure width/height from an already-local poster or media file. Returns null when
+ * nothing local is decodable yet — callers must wait instead of inventing a ratio.
+ */
+private fun measureLocalAttachmentAspectRatio(
+    context: android.content.Context,
+    attachment: ChatAttachment,
+): Float? {
+    attachment.hostAspectRatioOrNull()?.let { return it }
+    val candidates = listOfNotNull(attachment.posterUri, attachment.localUri)
+    for (uri in candidates) {
+        val preferVideo = attachment.isVideo && uri == attachment.localUri
+        val bitmap = cachedAttachmentPreviewOrNull(uri, preferVideo = preferVideo, maxSide = 320)
+            ?: decodeAndCacheAttachmentPreview(
+                context = context,
+                uri = uri,
+                preferVideo = preferVideo,
+                maxSide = 320,
+            )
+        if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
+            return bitmap.width.toFloat() / bitmap.height.toFloat()
+        }
+    }
+    return null
 }
 
 private fun attachmentPreviewCacheKey(uri: Uri, preferVideo: Boolean, maxSide: Int): String =
@@ -352,13 +376,73 @@ private fun MediaAttachmentGrid(
     onSingleImageBubbleWidthChanged: (Dp?) -> Unit = {},
 ) {
     var showAlbumGallery by remember { mutableStateOf(false) }
-    // Prefer the host aspect ratio. Fall back to a media-kind default so a received
-    // photo/video bubble has the right silhouette on the first frame (iOS parity),
-    // instead of a short 210dp stub that looks broken until something else changes.
+    val context = LocalContext.current
+    val singleAttachment = attachments.singleOrNull()
+    // Never invent a ratio. Show the bubble only after the host ratio or a local
+    // poster/file decode is known, so received media doesn't flash the wrong shape.
+    val localAspect = remember(
+        singleAttachment?.id,
+        singleAttachment?.aspectRatio,
+        singleAttachment?.posterUri,
+        singleAttachment?.localUri,
+    ) {
+        singleAttachment?.let { measureLocalAttachmentAspectRatio(context, it) }
+    }
+    var resolvedAspect by remember(
+        singleAttachment?.id,
+        singleAttachment?.aspectRatio,
+        singleAttachment?.posterUri,
+        singleAttachment?.localUri,
+    ) {
+        mutableStateOf(localAspect)
+    }
+    LaunchedEffect(
+        singleAttachment?.id,
+        singleAttachment?.aspectRatio,
+        singleAttachment?.posterUri,
+        singleAttachment?.localUri,
+        automaticallyLoadsImages,
+    ) {
+        val attachment = singleAttachment ?: return@LaunchedEffect
+        if (resolvedAspect != null) return@LaunchedEffect
+        val measured = withContext(Dispatchers.IO) {
+            fun aspectOf(uri: Uri, preferVideo: Boolean): Float? {
+                val bmp = decodeAndCacheAttachmentPreview(
+                    context = context,
+                    uri = uri,
+                    preferVideo = preferVideo,
+                    maxSide = 320,
+                ) ?: return null
+                if (bmp.width <= 0 || bmp.height <= 0) return null
+                return bmp.width.toFloat() / bmp.height.toFloat()
+            }
+            measureLocalAttachmentAspectRatio(context, attachment)
+                ?: run {
+                    val poster = attachment.posterUri
+                        ?: runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull()
+                    poster?.let { aspectOf(it, preferVideo = false) }
+                }
+                ?: run {
+                    // No poster yet — resolve content only when auto-load is on so we can
+                    // learn the ratio before painting. Manual-download hosts should send
+                    // aspectRatio or posterUri with the message.
+                    val available = runCatching {
+                        attachmentResolver.isAvailableLocally(attachment)
+                    }.getOrDefault(false)
+                    if (!automaticallyLoadsImages && !available && !attachment.isVideo) {
+                        null
+                    } else {
+                        val content = runCatching {
+                            attachmentResolver.resolveContent(attachment)
+                        }.getOrNull()
+                        content?.let { aspectOf(it, preferVideo = attachment.isVideo) }
+                    }
+                }
+        }
+        if (measured != null) resolvedAspect = measured
+    }
     val singleTileSize = if (attachments.size == 1) {
-        attachments.first()
-            .resolvedDisplayAspectRatio(isVideo)
-            ?.let { mediaTileSizeForAspect(it, mediaWidth) }
+        resolvedAspect?.let { mediaTileSizeForAspect(it, mediaWidth) }
     } else {
         null
     }
@@ -372,21 +456,25 @@ private fun MediaAttachmentGrid(
             .padding(top = topPadding),
     ) {
         if (attachments.size == 1) {
-            MediaAttachmentTile(
-                attachment = attachments.first(),
-                theme = theme,
-                width = singleTileSize?.first ?: mediaWidth,
-                height = singleTileSize?.second ?: SingleMediaHeight,
-                isVideo = isVideo,
-                compact = false,
-                automaticallyLoadsImages = automaticallyLoadsImages,
-                automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
-                attachmentResolver = attachmentResolver,
-                onCancelUpload = onCancelUpload,
-                onCancelDownload = onCancelDownload,
-                onRetryAttachment = onRetryAttachment,
-                onPreviewAspectRatio = null,
-            )
+            val tileSize = singleTileSize
+            if (tileSize != null) {
+                MediaAttachmentTile(
+                    attachment = attachments.first(),
+                    theme = theme,
+                    width = tileSize.first,
+                    height = tileSize.second,
+                    isVideo = isVideo,
+                    compact = false,
+                    automaticallyLoadsImages = automaticallyLoadsImages,
+                    automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
+                    attachmentResolver = attachmentResolver,
+                    onCancelUpload = onCancelUpload,
+                    onCancelDownload = onCancelDownload,
+                    onRetryAttachment = onRetryAttachment,
+                    onPreviewAspectRatio = null,
+                )
+            }
+            // else: ratio unknown — keep the bubble reserved empty until measured
         } else {
             val tileSize = (mediaWidth - MediaGridSpacing) / 2
             val visible = attachments.take(4)
@@ -662,11 +750,16 @@ private fun MediaAlbumGalleryRow(
         }
     }
     val canOpen = resolvedUri != null
-    // Reserve one stable row size before decode. Legacy attachments without stored
-    // dimensions use a deterministic fallback rather than changing size later.
-    val aspectRatio = attachment.aspectRatio
-        ?.takeIf { it.isFinite() && it > 0f }
-        ?: if (isVideo) 16f / 9f else 4f / 3f
+    val aspectRatio = remember(attachment.id, attachment.aspectRatio, bitmap) {
+        attachment.hostAspectRatioOrNull()
+            ?: bitmap?.takeIf { it.width > 0 && it.height > 0 }?.let {
+                it.width.toFloat() / it.height.toFloat()
+            }
+    }
+    // Wait for a real ratio — don't reserve a fake 4:3/16:9 gallery row.
+    if (aspectRatio == null) {
+        return
+    }
 
     Box(
         modifier = Modifier

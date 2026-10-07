@@ -648,28 +648,47 @@ internal fun MessageBubble(
         // Visual media always uses the max bubble width so a short caption cannot shrink
         // the photo/video tile (iOS / WhatsApp behavior).
         val hasVisualMedia = message.attachments.any { it.isImage || it.isVideo }
-        val isSingleImageMessage = message.attachments.size == 1 &&
-            message.attachments.first().isImage
-        val singleImageBubbleWidth = if (isSingleImageMessage) {
-            val aspect = message.attachments.first().aspectRatio
+        val isSingleMediaMessage = message.attachments.size == 1 &&
+            (message.attachments.first().isImage || message.attachments.first().isVideo)
+        // Only size from a known ratio (host metadata or measured poster). Never invent
+        // 4:3/16:9 — that flashes the wrong bubble before the real media arrives.
+        var measuredSingleMediaWidth by remember(message.id) { mutableStateOf<Dp?>(null) }
+        val hostSingleMediaWidth = if (isSingleMediaMessage) {
+            message.attachments.first().aspectRatio
                 ?.takeIf { it.isFinite() && it > 0f }
-                ?: 4f / 3f
-            val mediaWidth = (maxBubble - 8.dp).coerceAtLeast(72.dp)
-            val safeAspect = aspect.coerceAtLeast(0.05f)
-            if (safeAspect < 0.9f) {
-                val height = minOf(340.dp, mediaWidth / safeAspect)
-                minOf(mediaWidth, height * safeAspect) + 8.dp
-            } else {
-                maxBubble
-            }
+                ?.let { aspect ->
+                    val mediaWidth = (maxBubble - 8.dp).coerceAtLeast(72.dp)
+                    val safeAspect = aspect.coerceAtLeast(0.05f)
+                    if (safeAspect < 0.9f) {
+                        val height = minOf(340.dp, mediaWidth / safeAspect)
+                        minOf(mediaWidth, height * safeAspect) + 8.dp
+                    } else {
+                        maxBubble
+                    }
+                }
         } else {
             null
         }
+        val singleMediaBubbleWidth = hostSingleMediaWidth ?: measuredSingleMediaWidth
+        // Media-only: wait for a real ratio before painting any bubble chrome.
+        val awaitingSingleMediaAspect = isSingleMediaMessage &&
+            singleMediaBubbleWidth == null &&
+            !hasText &&
+            message.replyToMessageId == null
         val contentBubbleWidth = when {
-            hasVisualMedia -> maxOf(
-                singleImageBubbleWidth ?: maxBubble,
-                captionLayout?.bubbleWidth ?: ChatBubbleMetrics.MinimumWidth,
-            )
+            awaitingSingleMediaAspect -> 0.dp
+            hasVisualMedia -> {
+                val mediaWidth = when {
+                    isSingleMediaMessage -> singleMediaBubbleWidth
+                    else -> maxBubble
+                }
+                // Until a single media ratio is known, size from caption only — never a
+                // fake media frame. Media-only awaiting is handled above (0 width).
+                maxOf(
+                    mediaWidth ?: ChatBubbleMetrics.MinimumWidth,
+                    captionLayout?.bubbleWidth ?: ChatBubbleMetrics.MinimumWidth,
+                )
+            }
             isVoicePrimaryBubble -> ChatBubbleMetrics.voiceBubbleWidth(maxBubble)
             captionLayout != null -> captionLayout.bubbleWidth
             hasMedia -> maxBubble
@@ -724,16 +743,32 @@ internal fun MessageBubble(
                     modifier = Modifier
                         .width(bubbleWidth)
                         .widthIn(max = maxBubble)
-                        .background(
-                            if (incoming) theme.incomingBubbleColor else theme.outgoingBubbleColor,
-                            bubbleShape,
-                        )
-                        .clip(bubbleShape)
                         .then(
-                            if (incoming) {
-                                Modifier.border(1.dp, theme.incomingBubbleBorderColor, bubbleShape)
+                            if (awaitingSingleMediaAspect) {
+                                // Keep composing attachments so aspect can resolve; no chrome yet.
+                                Modifier
                             } else {
                                 Modifier
+                                    .background(
+                                        if (incoming) {
+                                            theme.incomingBubbleColor
+                                        } else {
+                                            theme.outgoingBubbleColor
+                                        },
+                                        bubbleShape,
+                                    )
+                                    .clip(bubbleShape)
+                                    .then(
+                                        if (incoming) {
+                                            Modifier.border(
+                                                1.dp,
+                                                theme.incomingBubbleBorderColor,
+                                                bubbleShape,
+                                            )
+                                        } else {
+                                            Modifier
+                                        },
+                                    )
                             },
                         )
                         .pointerInput(message.id, isMessageSelectionMode, onReply) {
@@ -819,40 +854,46 @@ internal fun MessageBubble(
                                 onRetryAttachment = onRetryAttachmentDownload,
                                 audioPlayer = audioPlayer,
                                 compactVoiceLayout = isVoicePrimaryBubble,
-                                onSingleImageBubbleWidthChanged = {},
+                                onSingleImageBubbleWidthChanged = { width ->
+                                    if (isSingleMediaMessage && hostSingleMediaWidth == null) {
+                                        measuredSingleMediaWidth = width
+                                    }
+                                },
                             )
                         }
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    start = if (isVoicePrimaryBubble) 8.dp else 10.dp,
-                                    end = if (isVoicePrimaryBubble) 8.dp else 12.dp,
+                        if (!awaitingSingleMediaAspect) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        start = if (isVoicePrimaryBubble) 8.dp else 10.dp,
+                                        end = if (isVoicePrimaryBubble) 8.dp else 12.dp,
+                                    )
+                                    .padding(
+                                        top = when {
+                                            isVoicePrimaryBubble -> 2.dp
+                                            !hasMediaAttachments && message.replyToMessageId == null -> 6.dp
+                                            hasText || !hasMediaAttachments -> 5.dp
+                                            else -> 2.dp
+                                        },
+                                        bottom = if (isVoicePrimaryBubble) 4.dp else 5.dp,
+                                    ),
+                            ) {
+                                MessageBubbleCaptionOrFooter(
+                                    hasText = hasText,
+                                    captionLayout = captionLayout,
+                                    trimmedText = trimmedText,
+                                    timeText = timeText,
+                                    isEdited = message.isEdited,
+                                    showsDelivery = showsDelivery,
+                                    deliveryStatus = message.deliveryStatus,
+                                    textColor = textColor,
+                                    timestampColor = timestampColor,
+                                    theme = theme,
+                                    onRetry = onRetry,
+                                    deliveryStatusContent = deliveryStatusContent,
                                 )
-                                .padding(
-                                    top = when {
-                                        isVoicePrimaryBubble -> 2.dp
-                                        !hasMediaAttachments && message.replyToMessageId == null -> 6.dp
-                                        hasText || !hasMediaAttachments -> 5.dp
-                                        else -> 2.dp
-                                    },
-                                    bottom = if (isVoicePrimaryBubble) 4.dp else 5.dp,
-                                ),
-                        ) {
-                            MessageBubbleCaptionOrFooter(
-                                hasText = hasText,
-                                captionLayout = captionLayout,
-                                trimmedText = trimmedText,
-                                timeText = timeText,
-                                isEdited = message.isEdited,
-                                showsDelivery = showsDelivery,
-                                deliveryStatus = message.deliveryStatus,
-                                textColor = textColor,
-                                timestampColor = timestampColor,
-                                theme = theme,
-                                onRetry = onRetry,
-                                deliveryStatusContent = deliveryStatusContent,
-                            )
+                            }
                         }
                     }
                 }

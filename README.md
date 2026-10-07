@@ -40,11 +40,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.22")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.23")
 }
 ```
 
-For development snapshots, replace `v1.6.22` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.23` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -128,13 +128,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.22`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.23`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.23 | Wait for real media aspect ratio before showing received attachment bubbles (no 4:3/16:9 flash) |
 | 1.6.22 | In-list typing slides with messages; instant poster media bubbles; iOS transfer ring/arrow controls |
 | 1.6.21 | Opt-in gallery save for manually downloaded photos/videos (`automaticallySavesDownloadedMediaToPhotos`) |
 | 1.6.20 | Manual attachment download badge; compact iOS voice bubbles; voice cancel/lock gesture polish; mic alerts |
