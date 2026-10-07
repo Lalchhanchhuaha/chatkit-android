@@ -208,6 +208,10 @@ internal fun MessageList(
         currentLoadPreviousMessages?.invoke()
     }
 
+    val currentIsViewingNewest by rememberUpdatedState(isViewingNewest)
+    val currentIsTyping by rememberUpdatedState(isTyping)
+    val currentUnreadIncomingCount by rememberUpdatedState(unreadIncomingCount)
+
     LaunchedEffect(listState) {
         snapshotFlow {
             listState.firstVisibleItemIndex < AutoScrollItemThreshold
@@ -245,28 +249,65 @@ internal fun MessageList(
         val newlyAddedMessages = messageSnapshot.filter { it.id !in previousMessageIds.orEmpty() }
         previousMessageIds = currentMessageIds
         if (lastId == trackedLastId) return@LaunchedEffect
-        trackedLastId = lastId
-        if (shouldScrollToNewestOnNewMessage(
-                isViewingNewest = isViewingNewest,
-                hasOutgoingMessage = newlyAddedMessages.any { it.direction == MessageDirection.Outgoing },
-                isScrollInProgress = listState.isScrollInProgress,
-            )
-        ) {
+
+        val newestRowFullyVisible = listState.firstVisibleItemIndex == 0 &&
+            listState.firstVisibleItemScrollOffset == 0
+        val shouldScroll = shouldScrollToNewestOnNewMessage(
+            isViewingNewest = currentIsViewingNewest,
+            hasOutgoingMessage = newlyAddedMessages.any { it.direction == MessageDirection.Outgoing },
+            isScrollInProgress = listState.isScrollInProgress,
+            newestRowFullyVisible = newestRowFullyVisible,
+        )
+        if (shouldScroll) {
             // Stable keys keep the previously visible row anchored when index 0
-            // is inserted. Wait until that row is laid out, then scroll so the
-            // new bottom row moves into view while existing rows (and the typing
-            // indicator, when present) slide together like iOS.
-            val renderedItemCount = invertedItems.size + if (isTyping) 1 else 0
-            snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .first { it >= renderedItemCount }
+            // is inserted — the new attachment often sits below the fold until we
+            // scroll. Do NOT set trackedLastId until scroll finishes: media hosts
+            // commonly emit transfer-state updates that cancel this effect, and a
+            // premature trackedLastId would skip the retry (text usually updates once).
+            val renderedItemCount = invertedItems.size + if (currentIsTyping) 1 else 0
+            withTimeoutOrNull(1_500) {
+                snapshotFlow { listState.layoutInfo.totalItemsCount }
+                    .first { it >= renderedItemCount }
+            }
             listState.animateScrollToItem(0)
+            // Tall image/video rows often measure a frame later than text; snap if
+            // animate left us slightly off the newest edge.
+            if (listState.firstVisibleItemIndex != 0 ||
+                listState.firstVisibleItemScrollOffset != 0
+            ) {
+                listState.scrollToItem(0)
+            }
+            trackedLastId = lastId
             onUnreadIncomingCountChanged(0)
-        } else if (!isViewingNewest) {
-            val newIncomingCount = newlyAddedMessages.count(ChatMessage::isIncoming)
-            if (newIncomingCount > 0) {
-                onUnreadIncomingCountChanged(unreadIncomingCount + newIncomingCount)
+        } else {
+            trackedLastId = lastId
+            if (!currentIsViewingNewest) {
+                val newIncomingCount = newlyAddedMessages.count(ChatMessage::isIncoming)
+                if (newIncomingCount > 0) {
+                    onUnreadIncomingCountChanged(currentUnreadIncomingCount + newIncomingCount)
+                }
             }
         }
+    }
+
+    // While following newest, re-pin when the bottom row grows (poster → full media).
+    LaunchedEffect(listState, hasPositionedTranscript) {
+        if (!hasPositionedTranscript) return@LaunchedEffect
+        snapshotFlow {
+            val atNewest = listState.firstVisibleItemIndex == 0
+            val item0Size = listState.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.index == 0 }
+                ?.size
+                ?: 0
+            atNewest to item0Size
+        }
+            .distinctUntilChanged()
+            .collect { (atNewest, item0Size) ->
+                if (!atNewest || item0Size <= 0) return@collect
+                if (listState.firstVisibleItemScrollOffset != 0) {
+                    listState.scrollToItem(0)
+                }
+            }
     }
 
     // Keep the typing row pinned to the newest edge so existing bubbles lift
@@ -379,7 +420,15 @@ internal fun shouldScrollToNewestOnNewMessage(
     isViewingNewest: Boolean,
     hasOutgoingMessage: Boolean,
     isScrollInProgress: Boolean,
-): Boolean = !isScrollInProgress && (isViewingNewest || hasOutgoingMessage)
+    newestRowFullyVisible: Boolean = true,
+): Boolean {
+    if (!(isViewingNewest || hasOutgoingMessage)) return false
+    // Block only when a gesture/animation is already holding the newest row in
+    // place. After a keyed insert the newest row is often off-screen (index > 0)
+    // even while isScrollInProgress is still true from a prior animate — still follow.
+    if (isScrollInProgress && newestRowFullyVisible) return false
+    return true
+}
 
 internal fun shouldLoadPreviousMessages(
     totalItemsCount: Int,

@@ -37,6 +37,21 @@ class MessageListBehaviorTest {
                 isViewingNewest = true,
                 hasOutgoingMessage = true,
                 isScrollInProgress = true,
+                newestRowFullyVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun followContinuesWhenNewestRowNotYetVisibleDuringScroll() {
+        // Keyed reverseLayout insert leaves index > 0; attachment transfer updates
+        // must still be allowed to finish scrolling to the new bottom row.
+        assertTrue(
+            shouldScrollToNewestOnNewMessage(
+                isViewingNewest = true,
+                hasOutgoingMessage = false,
+                isScrollInProgress = true,
+                newestRowFullyVisible = false,
             ),
         )
     }
