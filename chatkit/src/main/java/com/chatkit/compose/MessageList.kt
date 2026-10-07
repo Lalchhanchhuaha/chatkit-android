@@ -111,13 +111,14 @@ import kotlin.math.roundToInt
 
 /** Matches iOS UITableView insert cadence (~ease-in-out slide). */
 private val MessageInsertAnimation = tween<Float>(
-    durationMillis = 320,
+    durationMillis = 340,
     easing = FastOutSlowInEasing,
 )
 private val MessagePlacementAnimation = tween<androidx.compose.ui.unit.IntOffset>(
-    durationMillis = 320,
+    durationMillis = 340,
     easing = FastOutSlowInEasing,
 )
+private const val TypingIndicatorKey = "chatkit-typing"
 
 @Composable
 internal fun MessageList(
@@ -126,6 +127,8 @@ internal fun MessageList(
     listState: LazyListState,
     showsSender: Boolean,
     theme: ChatTheme,
+    isTyping: Boolean = false,
+    typingIndicatorText: String = "Typing…",
     isViewingNewest: Boolean,
     unreadIncomingCount: Int,
     onTranscriptTap: () -> Unit,
@@ -251,8 +254,9 @@ internal fun MessageList(
         ) {
             // Stable keys keep the previously visible row anchored when index 0
             // is inserted. Wait until that row is laid out, then scroll so the
-            // new bottom row moves into view while existing rows slide upward.
-            val renderedItemCount = invertedItems.size
+            // new bottom row moves into view while existing rows (and the typing
+            // indicator, when present) slide together like iOS.
+            val renderedItemCount = invertedItems.size + if (isTyping) 1 else 0
             snapshotFlow { listState.layoutInfo.totalItemsCount }
                 .first { it >= renderedItemCount }
             listState.animateScrollToItem(0)
@@ -262,6 +266,17 @@ internal fun MessageList(
             if (newIncomingCount > 0) {
                 onUnreadIncomingCountChanged(unreadIncomingCount + newIncomingCount)
             }
+        }
+    }
+
+    // Keep the typing row pinned to the newest edge so existing bubbles lift
+    // when it appears, then settle when a sent message replaces it.
+    LaunchedEffect(isTyping, isViewingNewest, hasPositionedTranscript) {
+        if (!isTyping || !isViewingNewest || !hasPositionedTranscript) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { it > 0 }
+        if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+            listState.animateScrollToItem(0)
         }
     }
 
@@ -292,6 +307,16 @@ internal fun MessageList(
             ),
             verticalArrangement = Arrangement.Bottom,
         ) {
+            // Index 0 stays at the visual bottom. Keeping typing here (instead of
+            // outside the list) lets animateItem move it with surrounding bubbles
+            // when a new message slides in.
+            if (isTyping) {
+                item(key = TypingIndicatorKey) {
+                    AnimatedListRow(animate = animateTranscriptChanges) {
+                        TypingIndicatorBubble(typingIndicatorText, theme)
+                    }
+                }
+            }
             itemsIndexed(
                 items = invertedItems,
                 key = { _, item -> item.stableKey() },
@@ -626,18 +651,17 @@ internal fun MessageBubble(
         val isSingleImageMessage = message.attachments.size == 1 &&
             message.attachments.first().isImage
         val singleImageBubbleWidth = if (isSingleImageMessage) {
-            message.attachments.first().aspectRatio
+            val aspect = message.attachments.first().aspectRatio
                 ?.takeIf { it.isFinite() && it > 0f }
-                ?.let { aspect ->
-                    val mediaWidth = (maxBubble - 8.dp).coerceAtLeast(72.dp)
-                    val safeAspect = aspect.coerceAtLeast(0.05f)
-                    if (safeAspect < 0.9f) {
-                        val height = minOf(340.dp, mediaWidth / safeAspect)
-                        minOf(mediaWidth, height * safeAspect) + 8.dp
-                    } else {
-                        maxBubble
-                    }
-                }
+                ?: 4f / 3f
+            val mediaWidth = (maxBubble - 8.dp).coerceAtLeast(72.dp)
+            val safeAspect = aspect.coerceAtLeast(0.05f)
+            if (safeAspect < 0.9f) {
+                val height = minOf(340.dp, mediaWidth / safeAspect)
+                minOf(mediaWidth, height * safeAspect) + 8.dp
+            } else {
+                maxBubble
+            }
         } else {
             null
         }
@@ -1493,7 +1517,8 @@ internal fun TypingIndicatorBubble(label: String, theme: ChatTheme) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            // Match message-row insets so the indicator lifts/settles with bubbles.
+            .padding(horizontal = 10.dp, vertical = 2.dp)
             .semantics { contentDescription = label },
         horizontalArrangement = Arrangement.Start,
     ) {

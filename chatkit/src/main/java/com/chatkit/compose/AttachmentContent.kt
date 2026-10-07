@@ -42,12 +42,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowCircleUp
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -74,7 +75,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -120,6 +123,24 @@ private val AttachmentPreviewCache = object : LruCache<String, ImageBitmap>(
             .coerceAtLeast(1L)
             .coerceAtMost(Int.MAX_VALUE.toLong())
             .toInt()
+}
+
+/** Host aspect ratio, else a stable media-kind fallback so the bubble isn't a square stub. */
+private fun ChatAttachment.resolvedDisplayAspectRatio(isVideo: Boolean): Float? =
+    aspectRatio?.takeIf { it.isFinite() && it > 0f }
+        ?: if (isVideo) 16f / 9f else 4f / 3f
+
+private fun mediaTileSizeForAspect(aspect: Float, mediaWidth: Dp): Pair<Dp, Dp> {
+    val safeAspect = aspect.coerceAtLeast(0.05f)
+    return if (safeAspect < 0.9f) {
+        val height = minOf(SinglePortraitMediaMaximumHeight, mediaWidth / safeAspect)
+        minOf(mediaWidth, height * safeAspect) to height
+    } else {
+        mediaWidth to minOf(
+            SingleMediaMaximumHeight,
+            maxOf(SingleMediaMinimumHeight, mediaWidth / safeAspect),
+        )
+    }
 }
 
 private fun attachmentPreviewCacheKey(uri: Uri, preferVideo: Boolean, maxSide: Int): String =
@@ -331,24 +352,13 @@ private fun MediaAttachmentGrid(
     onSingleImageBubbleWidthChanged: (Dp?) -> Unit = {},
 ) {
     var showAlbumGallery by remember { mutableStateOf(false) }
-    // Layout metadata is immutable for the lifetime of a row. Never derive the tile
-    // size from an asynchronously decoded bitmap: doing so visibly resizes the bubble.
-    val singleImageAspectRatio = attachments.firstOrNull()
-        ?.aspectRatio
-        ?.takeIf { it.isFinite() && it > 0f }
+    // Prefer the host aspect ratio. Fall back to a media-kind default so a received
+    // photo/video bubble has the right silhouette on the first frame (iOS parity),
+    // instead of a short 210dp stub that looks broken until something else changes.
     val singleTileSize = if (attachments.size == 1) {
-        singleImageAspectRatio?.let { aspect ->
-            val safeAspect = aspect.coerceAtLeast(0.05f)
-            if (safeAspect < 0.9f) {
-                val height = minOf(SinglePortraitMediaMaximumHeight, mediaWidth / safeAspect)
-                minOf(mediaWidth, height * safeAspect) to height
-            } else {
-                mediaWidth to minOf(
-                    SingleMediaMaximumHeight,
-                    maxOf(SingleMediaMinimumHeight, mediaWidth / safeAspect),
-                )
-            }
-        }
+        attachments.first()
+            .resolvedDisplayAspectRatio(isVideo)
+            ?.let { mediaTileSizeForAspect(it, mediaWidth) }
     } else {
         null
     }
@@ -805,12 +815,14 @@ private fun MediaAttachmentTile(
         resolveExhausted = result == null
         value = result
     }
-    val posterUri by produceState<Uri?>(attachment.posterUri, attachment.id, retryToken) {
-        // WhatsApp / iOS: lightweight encrypted poster for image and video bubbles
-        // before (or without) the full media blob.
-        value = attachment.posterUri
+    // Host poster is available on the first frame. Only fall back to an async
+    // resolver when the attachment didn't ship one.
+    val hostPosterUri = attachment.posterUri
+    val resolvedPosterUri by produceState<Uri?>(hostPosterUri, attachment.id, retryToken) {
+        value = hostPosterUri
             ?: runCatching { attachmentResolver.resolvePoster(attachment) }.getOrNull()
     }
+    val posterUri = hostPosterUri ?: resolvedPosterUri
     // Prefer full media when present; fall back to poster so the bubble is never blank
     // while the host is still downloading/decrypting the full file.
     val displayUri = resolvedUri ?: posterUri
@@ -894,7 +906,7 @@ private fun MediaAttachmentTile(
                         }
                     }
                 }.getOrNull()
-            }
+            } ?: initialBitmap
         } else {
             null
         }
@@ -911,26 +923,42 @@ private fun MediaAttachmentTile(
     val durationPadV = if (compact) 3.dp else 4.dp
     val durationInset = if (compact) 6.dp else 8.dp
     val transfer = attachment.transferState
+    // Poster or decoded preview means the bubble already has something real to show.
+    // Keep that visible while the full blob finishes — don't cover it with a dim overlay.
+    val hasDisplayPreview = bitmap != null || posterUri != null
     val waitingForManualDownload = transfer is TransferState.Uploaded &&
         resolvedUri == null &&
         !hasLocalContent &&
+        !hasDisplayPreview &&
         !automaticallyLoadsImages &&
         !manualDownloadRequested &&
         !isResolving &&
         !resolveExhausted &&
         !resolveCancelled &&
         !downloadCancelled
+    val isHostOrLocalDownloading =
+        transfer is TransferState.Downloading || isResolving
+    val downloadProgress = when {
+        transfer is TransferState.Downloading -> transfer.progress
+        isResolving -> resolveProgress
+        else -> 0f
+    }
     val effectiveTransfer = when {
         transfer is TransferState.Failed || transfer is TransferState.DownloadFailed -> transfer
         resolveCancelled -> TransferState.DownloadFailed
         downloadCancelled -> TransferState.DownloadFailed
         transfer is TransferState.Uploading -> transfer
-        transfer is TransferState.Downloading -> transfer
-        isResolving -> TransferState.Downloading(resolveProgress)
-        resolveExhausted -> TransferState.DownloadFailed
-        else -> transfer
+        // Blank tile only: full-bleed download overlay until pixels arrive.
+        isHostOrLocalDownloading && !hasDisplayPreview ->
+            TransferState.Downloading(downloadProgress)
+        resolveExhausted && !hasDisplayPreview -> TransferState.DownloadFailed
+        else -> TransferState.Uploaded
     }
-    val isTransferring = effectiveTransfer.isTransferring
+    val showInlineDownloadProgress = hasDisplayPreview &&
+        isHostOrLocalDownloading &&
+        !resolveCancelled &&
+        !downloadCancelled
+    val isTransferring = effectiveTransfer.isTransferring || showInlineDownloadProgress
     val transferFailed = effectiveTransfer.isFailedTransfer
 
     Box(
@@ -940,7 +968,11 @@ private fun MediaAttachmentTile(
             .clip(MediaTileShape)
             .then(if (isBlurred) Modifier.blur(9.dp).scale(1.08f) else Modifier)
             .background(if (isVideo) Color.Black.copy(alpha = 0.78f) else theme.thumbnailPlaceholderBackgroundColor)
-            .clickable(enabled = openPreviewOnTap && !isTransferring && !transferFailed) {
+            .clickable(
+                enabled = openPreviewOnTap &&
+                    !effectiveTransfer.isTransferring &&
+                    !transferFailed,
+            ) {
                 if (waitingForManualDownload) {
                     manualDownloadRequested = true
                     return@clickable
@@ -948,9 +980,12 @@ private fun MediaAttachmentTile(
                 if (isVideo) {
                     val videoUri = resolvedUri
                     if (videoUri == null) {
-                        // Poster-only: retry full download instead of opening externally.
-                        manualDownloadRequested = true
-                        retryToken += 1
+                        // Poster-only while downloading: keep the bubble tappable for retry
+                        // after failure; during an active download the badge owns cancel.
+                        if (!showInlineDownloadProgress) {
+                            manualDownloadRequested = true
+                            retryToken += 1
+                        }
                         return@clickable
                     }
                     previewVideoUri = videoUri
@@ -963,6 +998,7 @@ private fun MediaAttachmentTile(
                     retryToken += 1
                     return@clickable
                 }
+                // Poster is viewable immediately, even while the full file is still arriving.
                 previewImageUri = openUri
             },
         contentAlignment = Alignment.Center,
@@ -974,7 +1010,9 @@ private fun MediaAttachmentTile(
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
-        } else if (isVideo && !isTransferring && !transferFailed && !waitingForManualDownload) {
+        } else if (isVideo && !effectiveTransfer.isTransferring && !transferFailed &&
+            !waitingForManualDownload
+        ) {
             Icon(
                 imageVector = Icons.Default.Videocam,
                 contentDescription = null,
@@ -983,7 +1021,8 @@ private fun MediaAttachmentTile(
             )
         }
 
-        if (showsPlayControl && isVideo && !isTransferring && !transferFailed &&
+        if (showsPlayControl && isVideo && !showInlineDownloadProgress &&
+            !effectiveTransfer.isTransferring && !transferFailed &&
             !waitingForManualDownload && bitmap != null
         ) {
             Box(
@@ -1023,6 +1062,25 @@ private fun MediaAttachmentTile(
                 size = if (compact) 36.dp else 46.dp,
                 iconSize = if (compact) 16.dp else 20.dp,
                 onClick = { manualDownloadRequested = true },
+            )
+        }
+
+        // iOS / WhatsApp: keep the poster visible and only show a compact cancelable
+        // download control while the full attachment finishes in the background.
+        if (showInlineDownloadProgress) {
+            AttachmentDownloadBadge(
+                progress = downloadProgress.coerceAtLeast(0.04f),
+                size = if (compact) 36.dp else 46.dp,
+                iconSize = if (compact) 16.dp else 20.dp,
+                showCancel = true,
+                onClick = {
+                    if (transfer is TransferState.Downloading) {
+                        downloadCancelled = true
+                        onCancelDownload(attachment)
+                    } else {
+                        resolveCancelled = true
+                    }
+                },
             )
         }
 
@@ -1682,52 +1740,49 @@ internal fun VoiceMessageRow(
         ) {
             when (val transfer = displayTransfer) {
                 is TransferState.Uploading -> {
-                    CircularProgressIndicator(
-                        progress = { transfer.progress.coerceIn(0.04f, 1f) },
-                        modifier = Modifier.size(32.dp),
+                    AttachmentTransferRing(
+                        progress = transfer.progress,
                         color = playIcon,
-                        strokeWidth = 2.5.dp,
+                        modifier = Modifier.size(32.dp),
                     )
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Cancel upload",
                         tint = playIcon,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(11.dp),
                     )
                 }
                 is TransferState.Downloading -> {
-                    CircularProgressIndicator(
-                        progress = { transfer.progress.coerceIn(0.04f, 1f) },
-                        modifier = Modifier.size(32.dp),
+                    AttachmentTransferRing(
+                        progress = transfer.progress,
                         color = playIcon,
-                        strokeWidth = 2.5.dp,
+                        modifier = Modifier.size(32.dp),
                     )
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Cancel download",
                         tint = playIcon,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(11.dp),
                     )
                 }
                 TransferState.Failed -> Icon(
-                    imageVector = Icons.Default.Upload,
+                    imageVector = Icons.Default.ArrowUpward,
                     contentDescription = "Retry upload",
                     tint = playIcon,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(13.dp),
                 )
                 TransferState.DownloadFailed -> Icon(
-                    imageVector = Icons.Default.Download,
+                    imageVector = Icons.Default.ArrowDownward,
                     contentDescription = "Retry download",
                     tint = playIcon,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(13.dp),
                 )
                 TransferState.Uploaded -> {
                     if (isLoading) {
-                        CircularProgressIndicator(
-                            progress = { downloadProgress.coerceIn(0.04f, 1f) },
-                            modifier = Modifier.size(32.dp),
+                        AttachmentTransferRing(
+                            progress = downloadProgress,
                             color = playIcon,
-                            strokeWidth = 2.5.dp,
+                            modifier = Modifier.size(32.dp),
                         )
                     } else {
                         Icon(
@@ -1910,13 +1965,46 @@ private fun DocumentAttachmentRow(
     }
 }
 
-/** iOS-style centered download affordance: arrow before download, ring while loading. */
+/**
+ * iOS `AttachmentUploadRing`: white arc only (no track), 3pt stroke, round caps,
+ * starts at 12 o'clock.
+ */
+@Composable
+private fun AttachmentTransferRing(
+    progress: Float,
+    color: Color,
+    modifier: Modifier = Modifier,
+    strokeWidth: Dp = 3.dp,
+) {
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress.coerceIn(0.04f, 1f),
+        animationSpec = tween(250),
+        label = "attachment-transfer-ring",
+    )
+    Canvas(modifier = modifier) {
+        val stroke = Stroke(width = strokeWidth.toPx(), cap = StrokeCap.Round)
+        val inset = 5.dp.toPx()
+        val diameter = (size.minDimension - inset * 2f).coerceAtLeast(1f)
+        drawArc(
+            color = color,
+            startAngle = -90f,
+            sweepAngle = 360f * animatedProgress,
+            useCenter = false,
+            topLeft = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f),
+            size = Size(diameter, diameter),
+            style = stroke,
+        )
+    }
+}
+
+/** iOS `AttachmentDownloadBadge`: dark circle + arrow.down, or arc while loading. */
 @Composable
 private fun AttachmentDownloadBadge(
     progress: Float?,
     size: Dp,
     iconSize: Dp,
     onClick: (() -> Unit)? = null,
+    showCancel: Boolean = false,
 ) {
     Box(
         modifier = Modifier
@@ -1927,13 +2015,22 @@ private fun AttachmentDownloadBadge(
         contentAlignment = Alignment.Center,
     ) {
         if (progress != null) {
-            AttachmentProgressIndicator(
+            AttachmentTransferRing(
                 progress = progress,
-                modifier = Modifier.size(size - 10.dp),
+                color = Color.White,
+                modifier = Modifier.size(size),
             )
+            if (showCancel) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Cancel download",
+                    tint = Color.White,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
         } else {
             Icon(
-                imageVector = Icons.Default.Download,
+                imageVector = Icons.Default.ArrowDownward,
                 contentDescription = "Download attachment",
                 tint = Color.White,
                 modifier = Modifier.size(iconSize),
@@ -1942,24 +2039,7 @@ private fun AttachmentDownloadBadge(
     }
 }
 
-@Composable
-private fun AttachmentProgressIndicator(
-    progress: Float,
-    modifier: Modifier = Modifier,
-) {
-    val animatedProgress by animateFloatAsState(
-        targetValue = progress.coerceIn(0.04f, 1f),
-        animationSpec = tween(250),
-        label = "attachment-progress",
-    )
-    CircularProgressIndicator(
-        progress = { animatedProgress },
-        modifier = modifier,
-        color = Color.White,
-        strokeWidth = 3.dp,
-    )
-}
-
+/** Matches iOS `AttachmentTransferOverlay` upload/retry treatment. */
 @Composable
 private fun AttachmentTransferOverlay(
     transferState: TransferState,
@@ -1968,51 +2048,48 @@ private fun AttachmentTransferOverlay(
     onRetry: () -> Unit = {},
 ) {
     val controlSize = 46.dp
-    val iconSize = 20.dp
-    val cancelIconSize = 14.dp
     when (transferState) {
         is TransferState.Uploading -> {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.38f))
-                    .clickable(onClick = onCancel),
+                    .background(Color.Black.copy(alpha = 0.38f)),
                 contentAlignment = Alignment.Center,
             ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        AttachmentProgressIndicator(
-                            progress = transferState.progress,
-                            modifier = Modifier.size(46.dp),
+                Box(
+                    modifier = Modifier
+                        .size(controlSize)
+                        .clickable(onClick = onCancel)
+                        .semantics { contentDescription = "Cancel upload" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    AttachmentTransferRing(
+                        progress = transferState.progress,
+                        color = Color.White,
+                        modifier = Modifier.size(controlSize),
                     )
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Cancel upload",
+                        contentDescription = null,
                         tint = Color.White,
-                        modifier = Modifier.size(cancelIconSize),
+                        modifier = Modifier.size(14.dp),
                     )
                 }
             }
         }
         is TransferState.Downloading -> {
+            // Android download state: same visual language as iOS download badge + cancel.
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(onClick = onCancel),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    AttachmentDownloadBadge(
-                        progress = transferState.progress.coerceAtLeast(0.04f),
-                        size = controlSize,
-                        iconSize = iconSize,
-                    )
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Cancel download",
-                        tint = Color.White,
-                        modifier = Modifier.size(cancelIconSize),
-                    )
-                }
+                AttachmentDownloadBadge(
+                    progress = transferState.progress.coerceAtLeast(0.04f),
+                    size = controlSize,
+                    iconSize = 20.dp,
+                    onClick = onCancel,
+                    showCancel = true,
+                )
             }
         }
         TransferState.Failed -> {
@@ -2020,46 +2097,31 @@ private fun AttachmentTransferOverlay(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.38f))
-                    .clickable(onClick = onRetry),
+                    .clickable(onClick = onRetry)
+                    .semantics { contentDescription = "Upload failed. Tap to retry." },
                 contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(controlSize)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.45f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Upload,
-                        contentDescription = "Upload failed. Tap to retry.",
-                        tint = Color.White,
-                        modifier = Modifier.size(iconSize),
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.ArrowCircleUp,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(40.dp),
+                )
             }
         }
         TransferState.DownloadFailed -> {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clickable(onClick = onRetry),
+                    .clickable(onClick = onRetry)
+                    .semantics { contentDescription = "Download failed. Tap to retry." },
                 contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(controlSize)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.45f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = "Download failed. Tap to retry.",
-                        tint = Color.White,
-                        modifier = Modifier.size(iconSize),
-                    )
-                }
+                AttachmentDownloadBadge(
+                    progress = null,
+                    size = controlSize,
+                    iconSize = 20.dp,
+                )
             }
         }
         TransferState.Uploaded -> Unit

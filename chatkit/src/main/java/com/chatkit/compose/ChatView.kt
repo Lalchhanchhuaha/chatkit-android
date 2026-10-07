@@ -13,8 +13,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -613,6 +611,9 @@ public fun ChatView(
                 onRetryAttachmentDownload = onRetryAttachmentDownload,
                 audioPlayer = audioPlayer,
                 deliveryStatusContent = deliveryStatusContent,
+                isTyping = isTyping && isViewingNewest &&
+                    !isEditingMessage && !isMessageSelectionMode,
+                typingIndicatorText = typingIndicatorText,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
 
@@ -624,20 +625,6 @@ public fun ChatView(
                 .imePadding()
                 .navigationBarsPadding(),
         ) {
-        AnimatedVisibility(
-            visible = showsComposer && !isEditingMessage && !isMessageSelectionMode &&
-                isTyping && isViewingNewest,
-            enter = slideInVertically(
-                animationSpec = tween(220, easing = FastOutSlowInEasing),
-                initialOffsetY = { it },
-            ) + fadeIn(tween(220)),
-            exit = slideOutVertically(
-                animationSpec = tween(220, easing = FastOutSlowInEasing),
-                targetOffsetY = { it },
-            ) + fadeOut(tween(180)),
-        ) {
-            TypingIndicatorBubble(typingIndicatorText, theme)
-        }
         if (showsComposer) Column(
             modifier = Modifier
                 .fillMaxWidth()
