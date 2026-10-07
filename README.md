@@ -40,11 +40,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.25")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.26")
 }
 ```
 
-For development snapshots, replace `v1.6.25` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.26` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -134,13 +134,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.25`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.26`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.26 | Keep video download badge until the media file exists (poster alone is not enough; iOS 2.2.14) |
 | 1.6.25 | Show media bubbles immediately with host ratio or 4:3/16:9 fallback (no wait on download) |
 | 1.6.24 | Stamp upright aspectRatio on send (camera/gallery); ChatMediaDimensions helper for hosts |
 | 1.6.23 | Wait for real media aspect ratio before showing received attachment bubbles (no 4:3/16:9 flash) |

@@ -931,10 +931,13 @@ private fun MediaAttachmentTile(
     // Poster or decoded preview means the bubble already has something real to show.
     // Keep that visible while the full blob finishes — don't cover it with a dim overlay.
     val hasDisplayPreview = bitmap != null || posterUri != null
+    // iOS ChatKit 2.2.14 / Android 1.6.26: a poster paints the thumbnail, but videos still
+    // need the media file before treating the attachment as fully available (download badge
+    // + Photos save). Images may treat a durable poster as enough for display-only.
     val waitingForManualDownload = transfer is TransferState.Uploaded &&
         resolvedUri == null &&
         !hasLocalContent &&
-        !hasDisplayPreview &&
+        (!hasDisplayPreview || isVideo) &&
         !automaticallyLoadsImages &&
         !manualDownloadRequested &&
         !isResolving &&
