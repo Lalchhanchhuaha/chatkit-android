@@ -1,10 +1,13 @@
 package com.chatkit.compose
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -79,6 +82,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.ui.platform.LocalDensity
@@ -107,16 +111,19 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.roundToInt
 
-/** Matches iOS UITableView insert cadence (~ease-in-out slide). */
+/** Matches iOS UITableView insert cadence (~ease-in-out slide from bottom). */
+private const val MessageInsertDurationMillis = 340
 private val MessageInsertAnimation = tween<Float>(
-    durationMillis = 340,
+    durationMillis = MessageInsertDurationMillis,
     easing = FastOutSlowInEasing,
 )
-private val MessagePlacementAnimation = tween<androidx.compose.ui.unit.IntOffset>(
-    durationMillis = 340,
-    easing = FastOutSlowInEasing,
+private val MessagePlacementAnimation = spring<IntOffset>(
+    dampingRatio = Spring.DampingRatioNoBouncy,
+    stiffness = Spring.StiffnessMediumLow,
+    visibilityThreshold = IntOffset(1, 1),
 )
 private const val TypingIndicatorKey = "chatkit-typing"
 
@@ -170,6 +177,8 @@ internal fun MessageList(
     var previousMessageIds by remember(conversationId) { mutableStateOf<Set<String>?>(null) }
     var hasPositionedTranscript by remember(conversationId) { mutableStateOf(false) }
     var requestedForOldestId by remember(conversationId) { mutableStateOf<String?>(null) }
+    // Keys already painted without a bottom enter — used so only true inserts slide up.
+    val seenItemKeys = remember(conversationId) { mutableSetOf<String>() }
     val currentLoadPreviousMessages by rememberUpdatedState(onLoadPreviousMessages)
     val currentMessageIds = remember(messageSnapshot) {
         messageSnapshot.asSequence().map(ChatMessage::id).toSet()
@@ -230,6 +239,7 @@ internal fun MessageList(
             hasPositionedTranscript = false
             previousMessageIds = null
             trackedLastId = null
+            seenItemKeys.clear()
             return@LaunchedEffect
         }
 
@@ -242,6 +252,9 @@ internal fun MessageList(
             onNewestVisibilityChanged(true)
             trackedLastId = lastId
             previousMessageIds = currentMessageIds
+            seenItemKeys.clear()
+            seenItemKeys.addAll(invertedItems.map { it.stableKey() })
+            if (isTyping) seenItemKeys.add(TypingIndicatorKey)
             hasPositionedTranscript = true
             return@LaunchedEffect
         }
@@ -269,9 +282,10 @@ internal fun MessageList(
                 snapshotFlow { listState.layoutInfo.totalItemsCount }
                     .first { it >= renderedItemCount }
             }
+            // Animate with the insert — a hard scrollToItem snap here kills the
+            // iOS-style slide-up of the new bubble and neighboring rows.
             listState.animateScrollToItem(0)
-            // Tall image/video rows often measure a frame later than text; snap if
-            // animate left us slightly off the newest edge.
+            delay(MessageInsertDurationMillis.toLong())
             if (listState.firstVisibleItemIndex != 0 ||
                 listState.firstVisibleItemScrollOffset != 0
             ) {
@@ -313,7 +327,11 @@ internal fun MessageList(
     // Keep the typing row pinned to the newest edge so existing bubbles lift
     // when it appears, then settle when a sent message replaces it.
     LaunchedEffect(isTyping, isViewingNewest, hasPositionedTranscript) {
-        if (!isTyping || !isViewingNewest || !hasPositionedTranscript) return@LaunchedEffect
+        if (!isTyping) {
+            seenItemKeys.remove(TypingIndicatorKey)
+            return@LaunchedEffect
+        }
+        if (!isViewingNewest || !hasPositionedTranscript) return@LaunchedEffect
         snapshotFlow { listState.layoutInfo.totalItemsCount }
             .first { it > 0 }
         if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
@@ -353,7 +371,11 @@ internal fun MessageList(
             // when a new message slides in.
             if (isTyping) {
                 item(key = TypingIndicatorKey) {
-                    AnimatedListRow(animate = animateTranscriptChanges) {
+                    AnimatedListRow(
+                        animate = animateTranscriptChanges,
+                        itemKey = TypingIndicatorKey,
+                        seenItemKeys = seenItemKeys,
+                    ) {
                         TypingIndicatorBubble(typingIndicatorText, theme)
                     }
                 }
@@ -362,7 +384,11 @@ internal fun MessageList(
                 items = invertedItems,
                 key = { _, item -> item.stableKey() },
             ) { index, item ->
-                AnimatedListRow(animate = animateTranscriptChanges) {
+                AnimatedListRow(
+                    animate = animateTranscriptChanges,
+                    itemKey = item.stableKey(),
+                    seenItemKeys = seenItemKeys,
+                ) {
                     when (item) {
                         is TranscriptItem.DaySeparator -> DateSeparator(item.label, theme)
                         is TranscriptItem.Message -> MessageBubble(
@@ -455,30 +481,62 @@ private fun TranscriptItem.stableKey(): String = when (this) {
 }
 
 /**
- * Placement animation on [animateItem] is what creates the iOS-style slide-up.
+ * iOS-style insert: new rows slide up from below their final seat while existing
+ * rows animate placement upward. [animateItem] fade-in alone is not enough — that
+ * only opacity-fades at the final Y (looks like a pop-in, not a bottom slide).
  */
 @Composable
 private fun LazyItemScope.AnimatedListRow(
     animate: Boolean,
+    itemKey: String,
+    seenItemKeys: MutableSet<String>,
     content: @Composable () -> Unit,
 ) {
-    val rowModifier = if (animate) {
-        val isImeAnimating = isImeAnimating()
-        Modifier
-            .fillMaxWidth()
-            .animateItem(
-                fadeInSpec = MessageInsertAnimation,
-                fadeOutSpec = tween(180, easing = FastOutSlowInEasing),
-                // A changing IME viewport already moves every row. Running a placement
-                // animation at the same time creates the familiar message-list "jump".
-                placementSpec = if (isImeAnimating) null else MessagePlacementAnimation,
-            )
-    } else {
-        Modifier.fillMaxWidth()
+    val density = LocalDensity.current
+    val fallbackSlidePx = remember(density) { with(density) { 56.dp.toPx() } }
+    // First composition for this key while animations are enabled → slide from bottom.
+    // Keys seeded during initial transcript position are already in [seenItemKeys].
+    val shouldSlideFromBottom = remember(itemKey, animate) {
+        if (!animate) {
+            seenItemKeys.add(itemKey)
+            false
+        } else {
+            seenItemKeys.add(itemKey)
+        }
     }
-    Box(
-        rowModifier,
-    ) {
+    val enterProgress = remember(itemKey) { Animatable(if (shouldSlideFromBottom) 0f else 1f) }
+    LaunchedEffect(itemKey, shouldSlideFromBottom) {
+        if (shouldSlideFromBottom && enterProgress.value < 1f) {
+            enterProgress.animateTo(1f, animationSpec = MessageInsertAnimation)
+        }
+    }
+    var measuredHeightPx by remember(itemKey) { mutableFloatStateOf(0f) }
+    val isImeAnimating = if (animate) isImeAnimating() else false
+    val progress = enterProgress.value
+    val rowModifier = Modifier
+        .fillMaxWidth()
+        .onSizeChanged { measuredHeightPx = it.height.toFloat() }
+        .graphicsLayer {
+            if (shouldSlideFromBottom) {
+                val slide = max(measuredHeightPx, fallbackSlidePx)
+                // Positive Y is down — start below the final seat and ease up.
+                translationY = (1f - progress) * slide
+                alpha = progress
+            }
+        }
+        .then(
+            if (animate) {
+                Modifier.animateItem(
+                    // Custom bottom slide owns appearance; keep placement for neighbors.
+                    fadeInSpec = null,
+                    fadeOutSpec = tween(180, easing = FastOutSlowInEasing),
+                    placementSpec = if (isImeAnimating) null else MessagePlacementAnimation,
+                )
+            } else {
+                Modifier
+            },
+        )
+    Box(rowModifier) {
         content()
     }
 }
