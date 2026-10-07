@@ -69,7 +69,11 @@ public data class ChatAttachment(
     public val localUri: Uri? = null,
     public val posterUri: Uri? = null,
     public val transferState: TransferState = TransferState.Uploaded,
-    /** Upright media width / height. Lets the host reserve the final tile size before decode. */
+    /**
+     * Upright media width / height. Persist this on send (WhatsApp-style) so remote
+     * receivers can reserve the final tile size before the file or poster downloads.
+     * Prefer [ChatMediaDimensions.aspectRatio] when measuring locally.
+     */
     public val aspectRatio: Float? = null,
 ) {
     /** True when MIME metadata or, as a fallback, the extension describes an image. */
@@ -130,6 +134,10 @@ public sealed interface TransferState {
  * Gallery picks populate [localUri] from MediaStore. Camera captures populate both
  * [localFile] (required) and [localUri] (`file` URI for the same cache file). Never treat a
  * camera UUID as a MediaStore identifier.
+ *
+ * [aspectRatio] is upright width / height measured at selection/capture time. Persist it on
+ * the published [ChatAttachment] so remote receivers can size the bubble before download
+ * (WhatsApp-style metadata).
  */
 @Immutable
 public data class ChatMediaAttachment(
@@ -138,6 +146,8 @@ public data class ChatMediaAttachment(
     public val durationMillis: Long? = null,
     public val localUri: Uri,
     public val localFile: File? = null,
+    /** Upright width / height when known at selection or capture. */
+    public val aspectRatio: Float? = null,
 ) {
     /** Prefer the camera cache file when present; otherwise the gallery content URI. */
     public fun resolvedUri(): Uri = localFile?.toUri() ?: localUri

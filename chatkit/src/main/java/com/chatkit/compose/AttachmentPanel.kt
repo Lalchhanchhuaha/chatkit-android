@@ -80,6 +80,8 @@ private data class MediaItem(
     val mediaType: MediaType,
     val dateAdded: Long,
     val durationMillis: Long? = null,
+    /** Upright width / height from MediaStore metadata when available. */
+    val aspectRatio: Float? = null,
 )
 
 private enum class MediaTab { Photos, Videos }
@@ -263,6 +265,12 @@ internal fun AttachmentPanel(
                                         mediaType = item.mediaType,
                                         localUri = item.uri,
                                         durationMillis = item.durationMillis,
+                                        aspectRatio = item.aspectRatio
+                                            ?: measureUprightMediaAspectRatio(
+                                                context = context,
+                                                uri = item.uri,
+                                                isVideo = item.mediaType == MediaType.Video,
+                                            ),
                                     )
                                 }
                                 onMediaSelectionChanged(updated)
@@ -598,21 +606,35 @@ private fun loadMediaItems(
         MediaType.Photo -> {
             cr.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_ADDED),
+                arrayOf(
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DATE_ADDED,
+                    MediaStore.Images.Media.WIDTH,
+                    MediaStore.Images.Media.HEIGHT,
+                    MediaStore.Images.Media.ORIENTATION,
+                ),
                 null,
                 null,
                 "${MediaStore.Images.Media.DATE_ADDED} DESC",
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+                val widthCol = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+                val heightCol = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+                val orientationCol = cursor.getColumnIndex(MediaStore.Images.Media.ORIENTATION)
                 var count = 0
                 while (cursor.moveToNext() && count < 300) {
                     val id = cursor.getLong(idCol)
+                    val width = if (widthCol >= 0) cursor.getInt(widthCol) else 0
+                    val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
+                    val orientation = if (orientationCol >= 0) cursor.getInt(orientationCol) else 0
                     items += MediaItem(
                         id = id,
                         uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id),
                         mediaType = MediaType.Photo,
                         dateAdded = cursor.getLong(dateCol),
+                        aspectRatio = uprightDisplaySize(width, height, orientation)
+                            ?.let { (w, h) -> aspectRatioFromSize(w, h) },
                     )
                     count++
                 }
@@ -625,6 +647,8 @@ private fun loadMediaItems(
                     MediaStore.Video.Media._ID,
                     MediaStore.Video.Media.DATE_ADDED,
                     MediaStore.Video.Media.DURATION,
+                    MediaStore.Video.Media.WIDTH,
+                    MediaStore.Video.Media.HEIGHT,
                 ),
                 null,
                 null,
@@ -633,15 +657,21 @@ private fun loadMediaItems(
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
                 val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
+                val widthCol = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
+                val heightCol = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
                 var count = 0
                 while (cursor.moveToNext() && count < 300) {
                     val id = cursor.getLong(idCol)
+                    val width = if (widthCol >= 0) cursor.getInt(widthCol) else 0
+                    val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
+                    // MediaStore video WIDTH/HEIGHT are usually display-oriented already.
                     items += MediaItem(
                         id = id,
                         uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id),
                         mediaType = MediaType.Video,
                         dateAdded = cursor.getLong(dateCol),
                         durationMillis = cursor.getLong(durationCol),
+                        aspectRatio = aspectRatioFromSize(width, height),
                     )
                     count++
                 }

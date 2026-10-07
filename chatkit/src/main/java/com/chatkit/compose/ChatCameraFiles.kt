@@ -73,6 +73,7 @@ internal object ChatCameraFiles {
         trimmedDurationSeconds: Double? = null,
     ): ChatMediaAttachment {
         val file = trimmedFile ?: capture.localFile
+        val isVideo = capture.mediaType == MediaType.Video
         val durationSeconds = when {
             capture.mediaType == MediaType.Photo -> null
             trimmedDurationSeconds != null -> trimmedDurationSeconds
@@ -84,6 +85,8 @@ internal object ChatCameraFiles {
             durationMillis = durationSeconds?.let { (it * 1000.0).toLong() },
             localUri = file.toUri(),
             localFile = file,
+            // Stamp upright ratio at send time so optimistic + host echo bubbles match.
+            aspectRatio = measureUprightMediaAspectRatio(file, isVideo = isVideo),
         )
     }
 
@@ -101,6 +104,9 @@ internal object ChatCameraFiles {
         } else {
             null
         }
+        val aspectRatio = media.aspectRatio
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?: media.localFile?.let { measureUprightMediaAspectRatio(it, isVideo = isVideo) }
         return ChatAttachment(
             id = media.id,
             fileName = if (isVideo) "video.mp4" else "photo.jpg",
@@ -109,6 +115,7 @@ internal object ChatCameraFiles {
             localUri = media.resolvedUri(),
             posterUri = posterUri,
             transferState = TransferState.Uploading(0f),
+            aspectRatio = aspectRatio,
         )
     }
 

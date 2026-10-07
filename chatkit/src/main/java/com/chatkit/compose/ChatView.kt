@@ -501,15 +501,7 @@ public fun ChatView(
                 replyToWasIncoming = replyingTo?.isIncoming,
                 replyToAttachment = replyingTo?.replyPreviewAttachment(),
                 attachments = pendingMedia.map { media ->
-                    val isVideo = media.mediaType == MediaType.Video
-                    ChatAttachment(
-                        id = media.id,
-                        fileName = if (isVideo) "video.mp4" else "photo.jpg",
-                        mimeType = if (isVideo) "video/mp4" else "image/jpeg",
-                        durationMillis = media.durationMillis,
-                        localUri = media.resolvedUri(),
-                        transferState = TransferState.Uploading(0f),
-                    )
+                    ChatCameraFiles.makeOptimisticAttachment(media)
                 } + pendingDocuments.mapIndexed { index, uri ->
                     ChatAttachment(
                         id = "${uri}#$index",
