@@ -22,16 +22,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -66,7 +71,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -611,12 +615,12 @@ public fun ChatView(
 
         // Smart VC detail layout: only the natural-height footer receives bottom insets.
         // The weighted transcript yields space as the keyboard or attachment panel grows.
-        // iOS order: attachment panel above the composer so the input stays bottom-anchored.
+        // iOS: panel sits above the composer; tapping the field keeps the panel open and
+        // both ride up together with the keyboard via shared ime insets.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .imePadding()
-                .navigationBarsPadding(),
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         ) {
         AnimatedVisibility(
             visible = isAttachmentPickerPresented,
@@ -788,12 +792,7 @@ public fun ChatView(
                                             onValueChange = { draft = it; onTyping() },
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .focusRequester(composerFocusRequester)
-                                                .onFocusChanged { focus ->
-                                                    if (focus.isFocused && isAttachmentPickerPresented) {
-                                                        isAttachmentPickerPresented = false
-                                                    }
-                                                },
+                                                .focusRequester(composerFocusRequester),
                                             enabled = true,
                                             textStyle = MaterialTheme.typography.bodyMedium.copy(
                                                 color = theme.incomingTextColor,
