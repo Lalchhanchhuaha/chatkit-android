@@ -611,12 +611,35 @@ public fun ChatView(
 
         // Smart VC detail layout: only the natural-height footer receives bottom insets.
         // The weighted transcript yields space as the keyboard or attachment panel grows.
+        // iOS order: attachment panel above the composer so the input stays bottom-anchored.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
                 .navigationBarsPadding(),
         ) {
+        AnimatedVisibility(
+            visible = isAttachmentPickerPresented,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            AttachmentPanel(
+                theme = theme,
+                showsVideoAttachments = showsVideoAttachments,
+                showsDocumentAttachments = showsDocumentAttachments,
+                maximumMediaSelection = maximumMediaSelection,
+                documentSelectionCount = pendingDocuments.size,
+                selectedMedia = pendingMedia.toList(),
+                onClose = ::dismissAttachmentPicker,
+                onMediaSelectionChanged = { attachments ->
+                    pendingMedia.clear()
+                    pendingMedia += attachments
+                    if (attachments.isNotEmpty()) pendingDocuments.clear()
+                },
+                onDocumentPickerRequested = ::launchDocumentPicker,
+            )
+        }
+
         if (showsComposer) Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -844,28 +867,6 @@ public fun ChatView(
                 }
             }
             }
-        }
-
-        AnimatedVisibility(
-            visible = isAttachmentPickerPresented,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut(),
-        ) {
-            AttachmentPanel(
-                theme = theme,
-                showsVideoAttachments = showsVideoAttachments,
-                showsDocumentAttachments = showsDocumentAttachments,
-                maximumMediaSelection = maximumMediaSelection,
-                documentSelectionCount = pendingDocuments.size,
-                selectedMedia = pendingMedia.toList(),
-                onClose = ::dismissAttachmentPicker,
-                onMediaSelectionChanged = { attachments ->
-                    pendingMedia.clear()
-                    pendingMedia += attachments
-                    if (attachments.isNotEmpty()) pendingDocuments.clear()
-                },
-                onDocumentPickerRequested = ::launchDocumentPicker,
-            )
         }
         }
         }
