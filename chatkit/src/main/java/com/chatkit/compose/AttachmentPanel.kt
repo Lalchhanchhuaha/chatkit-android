@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -77,6 +78,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -148,13 +150,31 @@ internal fun AttachmentPanel(
     }
 
     var mediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    val gridState = rememberLazyGridState()
     LaunchedEffect(hasPermission, activeType) {
         if (!hasPermission) {
             mediaItems = emptyList()
             return@LaunchedEffect
         }
-        mediaItems = withContext(Dispatchers.IO) {
-            loadMediaItems(context.contentResolver, activeType)
+        // Match iOS PhotoLibraryStore: fetch newest-first up to fetchLimit,
+        // but publish the first page immediately so the grid isn't empty while
+        // the rest of the library arrives on a background thread.
+        mediaItems = emptyList()
+        var offset = 0
+        while (offset < MediaQueryLimit) {
+            val page = withContext(Dispatchers.IO) {
+                loadMediaItems(
+                    cr = context.contentResolver,
+                    type = activeType,
+                    limit = MediaPageSize,
+                    offset = offset,
+                )
+            }
+            if (page.isEmpty()) break
+            mediaItems = mediaItems + page
+            offset += page.size
+            if (page.size < MediaPageSize) break
+            yield()
         }
     }
 
@@ -163,9 +183,9 @@ internal fun AttachmentPanel(
     }
 
     Column(
+        // Height comes from ChatView (iOS attachmentPickerHeight, clamped 150…340).
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(max = 340.dp)
             .clip(PanelTopShape)
             .background(theme.attachmentPanelBackgroundColor),
     ) {
@@ -237,10 +257,10 @@ internal fun AttachmentPanel(
             else -> {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(4),
+                    state = gridState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .heightIn(max = 288.dp),
+                        .weight(1f),
                     contentPadding = PaddingValues(top = 2.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -254,7 +274,11 @@ internal fun AttachmentPanel(
                             )
                         }
                     }
-                    items(mediaItems, key = { it.id }) { item ->
+                    items(
+                        items = mediaItems,
+                        key = { it.id },
+                        contentType = { "media" },
+                    ) { item ->
                         val idStr = item.uri.toString()
                         val isSelected = idStr in selectedIds
                         val selectionIndex =
@@ -493,7 +517,11 @@ private fun MediaThumbnailCell(
     DisposableEffect(item.id, item.mediaType) {
         onDispose { cancellation.cancel() }
     }
-    val thumbnail by produceState<ImageBitmap?>(null, item.id, item.mediaType) {
+    val cached = remember(item.id, item.mediaType) {
+        peekCachedThumbnail(item)
+    }
+    val thumbnail by produceState(cached, item.id, item.mediaType) {
+        if (value != null) return@produceState
         value = withContext(ThumbnailLoadDispatcher) {
             ThumbnailLoadSemaphore.withPermit {
                 if (cancellation.isCanceled) return@withPermit null
@@ -586,14 +614,17 @@ private fun formatMediaDuration(durationMillis: Long): String {
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
 
-private const val MediaThumbnailCacheKilobytes = 12 * 1024
-/** Grid cells are ~¼ screen; 128px is enough and much cheaper than 256. */
+private const val MediaThumbnailCacheKilobytes = 16 * 1024
+/** Grid cells are ~¼ screen; keep thumbs light so fling stays smooth. */
 private const val ThumbnailPixelSize = 128
-private const val MediaQueryLimit = 120
+/** Match iOS `PHFetchOptions.fetchLimit`. */
+private const val MediaQueryLimit = 300
+/** First paint + append pages (iOS loads off-main; we stream pages for snappier UI). */
+private const val MediaPageSize = 60
 /** Cap concurrent MediaStore thumbnail decodes so scrolling doesn't thrash disk. */
-private val ThumbnailLoadSemaphore = Semaphore(permits = 4)
+private val ThumbnailLoadSemaphore = Semaphore(permits = 6)
 private val ThumbnailLoadDispatcher =
-    Executors.newFixedThreadPool(4).asCoroutineDispatcher()
+    Executors.newFixedThreadPool(6).asCoroutineDispatcher()
 
 private val MediaThumbnailCache = object : LruCache<String, ImageBitmap>(
     MediaThumbnailCacheKilobytes,
@@ -605,12 +636,20 @@ private val MediaThumbnailCache = object : LruCache<String, ImageBitmap>(
             .toInt()
 }
 
+private fun thumbnailCacheKey(item: MediaItem): String =
+    "${item.mediaType}:${item.id}:$ThumbnailPixelSize"
+
+private fun peekCachedThumbnail(item: MediaItem): ImageBitmap? =
+    synchronized(MediaThumbnailCache) {
+        MediaThumbnailCache.get(thumbnailCacheKey(item))
+    }
+
 private fun loadCachedThumbnail(
     cr: ContentResolver,
     item: MediaItem,
     cancellation: CancellationSignal? = null,
 ): ImageBitmap? {
-    val key = "${item.mediaType}:${item.id}:$ThumbnailPixelSize"
+    val key = thumbnailCacheKey(item)
     synchronized(MediaThumbnailCache) {
         MediaThumbnailCache.get(key)?.let { return it }
     }
@@ -624,8 +663,12 @@ private fun loadCachedThumbnail(
 private fun loadMediaItems(
     cr: ContentResolver,
     type: MediaType,
+    limit: Int = MediaQueryLimit,
+    offset: Int = 0,
 ): List<MediaItem> {
-    val items = ArrayList<MediaItem>(MediaQueryLimit)
+    val items = ArrayList<MediaItem>(limit.coerceAtMost(MediaPageSize))
+    // On API 30+ MediaStore applies OFFSET; older APIs skip rows in the cursor.
+    val manualSkip = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) 0 else offset
     when (type) {
         MediaType.Photo -> {
             queryMediaStore(
@@ -639,14 +682,18 @@ private fun loadMediaItems(
                     MediaStore.Images.Media.ORIENTATION,
                 ),
                 sortColumn = MediaStore.Images.Media.DATE_ADDED,
+                limit = limit,
+                offset = offset,
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
                 val widthCol = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
                 val heightCol = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
                 val orientationCol = cursor.getColumnIndex(MediaStore.Images.Media.ORIENTATION)
+                var skipped = 0
+                while (skipped < manualSkip && cursor.moveToNext()) skipped++
                 var count = 0
-                while (cursor.moveToNext() && count < MediaQueryLimit) {
+                while (cursor.moveToNext() && count < limit) {
                     val id = cursor.getLong(idCol)
                     val width = if (widthCol >= 0) cursor.getInt(widthCol) else 0
                     val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
@@ -675,14 +722,18 @@ private fun loadMediaItems(
                     MediaStore.Video.Media.HEIGHT,
                 ),
                 sortColumn = MediaStore.Video.Media.DATE_ADDED,
+                limit = limit,
+                offset = offset,
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
                 val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
                 val widthCol = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
                 val heightCol = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+                var skipped = 0
+                while (skipped < manualSkip && cursor.moveToNext()) skipped++
                 var count = 0
-                while (cursor.moveToNext() && count < MediaQueryLimit) {
+                while (cursor.moveToNext() && count < limit) {
                     val id = cursor.getLong(idCol)
                     val width = if (widthCol >= 0) cursor.getInt(widthCol) else 0
                     val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
@@ -708,9 +759,17 @@ private fun queryMediaStore(
     collection: Uri,
     projection: Array<String>,
     sortColumn: String,
+    limit: Int,
+    offset: Int,
 ) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
     val args = Bundle().apply {
-        putInt(ContentResolver.QUERY_ARG_LIMIT, MediaQueryLimit)
+        // OFFSET is API 30+; older platforms need limit = offset + page so we can skip.
+        val queryLimit =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) limit else offset + limit
+        putInt(ContentResolver.QUERY_ARG_LIMIT, queryLimit)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && offset > 0) {
+            putInt(ContentResolver.QUERY_ARG_OFFSET, offset)
+        }
         putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(sortColumn))
         putInt(
             ContentResolver.QUERY_ARG_SORT_DIRECTION,

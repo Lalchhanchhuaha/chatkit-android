@@ -7,17 +7,17 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
@@ -558,6 +558,13 @@ public fun ChatView(
             .fillMaxSize()
             .background(theme.backgroundColor),
     ) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+        // iOS attachmentPickerHeight: reserve composer + some transcript, clamp 150…340.
+        val attachmentPickerHeight = run {
+            val composerReserve = 62.dp
+            val transcriptReserve = (maxHeight * 0.18f).coerceIn(64.dp, 112.dp)
+            (maxHeight - composerReserve - transcriptReserve).coerceIn(150.dp, 340.dp)
+        }
         Column(Modifier.fillMaxSize()) {
             MessageList(
                 messages = displayedMessages,
@@ -622,10 +629,18 @@ public fun ChatView(
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         ) {
+        // iOS: `.transition(.move(edge: .bottom))` — solid slide, no fade (fade
+        // flashed the transcript for a frame while the keyboard/layout moved).
         AnimatedVisibility(
             visible = isAttachmentPickerPresented,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut(),
+            enter = slideInVertically(
+                animationSpec = tween(durationMillis = 280, easing = EaseInOut),
+                initialOffsetY = { fullHeight -> fullHeight },
+            ),
+            exit = slideOutVertically(
+                animationSpec = tween(durationMillis = 240, easing = EaseInOut),
+                targetOffsetY = { fullHeight -> fullHeight },
+            ),
         ) {
             AttachmentPanel(
                 theme = theme,
@@ -641,6 +656,9 @@ public fun ChatView(
                     if (attachments.isNotEmpty()) pendingDocuments.clear()
                 },
                 onDocumentPickerRequested = ::launchDocumentPicker,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(attachmentPickerHeight),
             )
         }
 
@@ -868,6 +886,8 @@ public fun ChatView(
             }
         }
         }
+        }
+
         }
 
         // iOS: overlay on the full chat surface, bottomTrailing, 66pt above the mic.
