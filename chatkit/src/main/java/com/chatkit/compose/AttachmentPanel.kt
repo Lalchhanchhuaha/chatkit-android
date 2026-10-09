@@ -1,11 +1,14 @@
 package com.chatkit.compose
 
+import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.CancellationSignal
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.LruCache
@@ -47,6 +50,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,7 +75,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 private data class MediaItem(
@@ -260,17 +268,14 @@ internal fun AttachmentPanel(
                                 if (isSelected) {
                                     updated.removeAll { it.id == idStr }
                                 } else if (updated.size < maximumMediaSelection.coerceAtLeast(1)) {
+                                    // Prefer MediaStore metadata only — never decode the
+                                    // full asset on the UI thread when selecting.
                                     updated += ChatMediaAttachment(
                                         id = idStr,
                                         mediaType = item.mediaType,
                                         localUri = item.uri,
                                         durationMillis = item.durationMillis,
-                                        aspectRatio = item.aspectRatio
-                                            ?: measureUprightMediaAspectRatio(
-                                                context = context,
-                                                uri = item.uri,
-                                                isVideo = item.mediaType == MediaType.Video,
-                                            ),
+                                        aspectRatio = item.aspectRatio,
                                     )
                                 }
                                 onMediaSelectionChanged(updated)
@@ -484,9 +489,18 @@ private fun MediaThumbnailCell(
     onClick: () -> Unit,
 ) {
     val context = LocalContext.current
+    val cancellation = remember(item.id, item.mediaType) { CancellationSignal() }
+    DisposableEffect(item.id, item.mediaType) {
+        onDispose { cancellation.cancel() }
+    }
     val thumbnail by produceState<ImageBitmap?>(null, item.id, item.mediaType) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { loadCachedThumbnail(context.contentResolver, item) }.getOrNull()
+        value = withContext(ThumbnailLoadDispatcher) {
+            ThumbnailLoadSemaphore.withPermit {
+                if (cancellation.isCanceled) return@withPermit null
+                runCatching {
+                    loadCachedThumbnail(context.contentResolver, item, cancellation)
+                }.getOrNull()
+            }
         }
     }
     val selected = selectionIndex != null
@@ -573,6 +587,14 @@ private fun formatMediaDuration(durationMillis: Long): String {
 }
 
 private const val MediaThumbnailCacheKilobytes = 12 * 1024
+/** Grid cells are ~¼ screen; 128px is enough and much cheaper than 256. */
+private const val ThumbnailPixelSize = 128
+private const val MediaQueryLimit = 120
+/** Cap concurrent MediaStore thumbnail decodes so scrolling doesn't thrash disk. */
+private val ThumbnailLoadSemaphore = Semaphore(permits = 4)
+private val ThumbnailLoadDispatcher =
+    Executors.newFixedThreadPool(4).asCoroutineDispatcher()
+
 private val MediaThumbnailCache = object : LruCache<String, ImageBitmap>(
     MediaThumbnailCacheKilobytes,
 ) {
@@ -584,37 +606,39 @@ private val MediaThumbnailCache = object : LruCache<String, ImageBitmap>(
 }
 
 private fun loadCachedThumbnail(
-    cr: android.content.ContentResolver,
+    cr: ContentResolver,
     item: MediaItem,
+    cancellation: CancellationSignal? = null,
 ): ImageBitmap? {
-    val key = "${item.mediaType}:${item.id}"
+    val key = "${item.mediaType}:${item.id}:$ThumbnailPixelSize"
     synchronized(MediaThumbnailCache) {
         MediaThumbnailCache.get(key)?.let { return it }
     }
-    val thumbnail = loadThumbnail(cr, item) ?: return null
+    if (cancellation?.isCanceled == true) return null
+    val thumbnail = loadThumbnail(cr, item, cancellation) ?: return null
+    if (cancellation?.isCanceled == true) return null
     synchronized(MediaThumbnailCache) { MediaThumbnailCache.put(key, thumbnail) }
     return thumbnail
 }
 
 private fun loadMediaItems(
-    cr: android.content.ContentResolver,
+    cr: ContentResolver,
     type: MediaType,
 ): List<MediaItem> {
-    val items = ArrayList<MediaItem>(200)
+    val items = ArrayList<MediaItem>(MediaQueryLimit)
     when (type) {
         MediaType.Photo -> {
-            cr.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                arrayOf(
+            queryMediaStore(
+                cr = cr,
+                collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection = arrayOf(
                     MediaStore.Images.Media._ID,
                     MediaStore.Images.Media.DATE_ADDED,
                     MediaStore.Images.Media.WIDTH,
                     MediaStore.Images.Media.HEIGHT,
                     MediaStore.Images.Media.ORIENTATION,
                 ),
-                null,
-                null,
-                "${MediaStore.Images.Media.DATE_ADDED} DESC",
+                sortColumn = MediaStore.Images.Media.DATE_ADDED,
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
@@ -622,7 +646,7 @@ private fun loadMediaItems(
                 val heightCol = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
                 val orientationCol = cursor.getColumnIndex(MediaStore.Images.Media.ORIENTATION)
                 var count = 0
-                while (cursor.moveToNext() && count < 300) {
+                while (cursor.moveToNext() && count < MediaQueryLimit) {
                     val id = cursor.getLong(idCol)
                     val width = if (widthCol >= 0) cursor.getInt(widthCol) else 0
                     val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
@@ -640,18 +664,17 @@ private fun loadMediaItems(
             }
         }
         MediaType.Video -> {
-            cr.query(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                arrayOf(
+            queryMediaStore(
+                cr = cr,
+                collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                projection = arrayOf(
                     MediaStore.Video.Media._ID,
                     MediaStore.Video.Media.DATE_ADDED,
                     MediaStore.Video.Media.DURATION,
                     MediaStore.Video.Media.WIDTH,
                     MediaStore.Video.Media.HEIGHT,
                 ),
-                null,
-                null,
-                "${MediaStore.Video.Media.DATE_ADDED} DESC",
+                sortColumn = MediaStore.Video.Media.DATE_ADDED,
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
                 val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
@@ -659,7 +682,7 @@ private fun loadMediaItems(
                 val widthCol = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
                 val heightCol = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
                 var count = 0
-                while (cursor.moveToNext() && count < 300) {
+                while (cursor.moveToNext() && count < MediaQueryLimit) {
                     val id = cursor.getLong(idCol)
                     val width = if (widthCol >= 0) cursor.getInt(widthCol) else 0
                     val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
@@ -680,12 +703,37 @@ private fun loadMediaItems(
     return items
 }
 
+private fun queryMediaStore(
+    cr: ContentResolver,
+    collection: Uri,
+    projection: Array<String>,
+    sortColumn: String,
+) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    val args = Bundle().apply {
+        putInt(ContentResolver.QUERY_ARG_LIMIT, MediaQueryLimit)
+        putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(sortColumn))
+        putInt(
+            ContentResolver.QUERY_ARG_SORT_DIRECTION,
+            ContentResolver.QUERY_SORT_DIRECTION_DESCENDING,
+        )
+    }
+    cr.query(collection, projection, args, null)
+} else {
+    cr.query(collection, projection, null, null, "$sortColumn DESC")
+}
+
 private fun loadThumbnail(
-    cr: android.content.ContentResolver,
+    cr: ContentResolver,
     item: MediaItem,
+    cancellation: CancellationSignal? = null,
 ): ImageBitmap? {
+    if (cancellation?.isCanceled == true) return null
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        cr.loadThumbnail(item.uri, Size(256, 256), null).asImageBitmap()
+        cr.loadThumbnail(
+            item.uri,
+            Size(ThumbnailPixelSize, ThumbnailPixelSize),
+            cancellation,
+        ).asImageBitmap()
     } else {
         when (item.mediaType) {
             MediaType.Photo -> {
@@ -693,20 +741,19 @@ private fun loadThumbnail(
                 MediaStore.Images.Thumbnails.getThumbnail(
                     cr,
                     item.id,
-                    MediaStore.Images.Thumbnails.MINI_KIND,
+                    MediaStore.Images.Thumbnails.MICRO_KIND,
                     null,
-                )?.asImageBitmap() ?: decodeSampledBitmap(cr, item.uri, 256, 256)
+                )?.asImageBitmap()
+                    ?: decodeSampledBitmap(cr, item.uri, ThumbnailPixelSize, ThumbnailPixelSize)
             }
             MediaType.Video -> {
-                val retriever = android.media.MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(null as android.content.Context?, item.uri)
-                    retriever.getFrameAtTime(0)?.asImageBitmap()
-                } catch (_: Exception) {
-                    null
-                } finally {
-                    runCatching { retriever.release() }
-                }
+                @Suppress("DEPRECATION")
+                MediaStore.Video.Thumbnails.getThumbnail(
+                    cr,
+                    item.id,
+                    MediaStore.Video.Thumbnails.MICRO_KIND,
+                    null,
+                )?.asImageBitmap()
             }
         }
     }
