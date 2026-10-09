@@ -10,6 +10,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -55,6 +57,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -82,6 +85,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -94,6 +98,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -523,15 +528,7 @@ private fun MediaAlbumGallery(
         "${attachments.size} photos"
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false,
-        ),
-    ) {
+    ZoomDialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -1152,6 +1149,45 @@ private fun MediaAttachmentTile(
     }
 }
 
+
+/** Fullscreen media dialog that zooms/scales in instead of sliding up like a sheet. */
+@Composable
+private fun ZoomDialog(
+    onDismissRequest: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        val view = LocalView.current
+        SideEffect {
+            // Disable the platform dialog slide-up so only our zoom animation plays.
+            (view.parent as? DialogWindowProvider)?.window?.setWindowAnimations(0)
+        }
+        var visible by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { visible = true }
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(160)) + scaleIn(
+                initialScale = 0.82f,
+                animationSpec = tween(220),
+            ),
+            exit = fadeOut(animationSpec = tween(140)) + scaleOut(
+                targetScale = 0.88f,
+                animationSpec = tween(180),
+            ),
+        ) {
+            content()
+        }
+    }
+}
+
 /** In-app image viewer with pinch-zoom and an X close control (iOS ZoomableFullScreenImage). */
 @Composable
 private fun FullScreenImagePreview(
@@ -1182,15 +1218,7 @@ private fun FullScreenImagePreview(
         } ?: initialBitmap
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false,
-        ),
-    ) {
+    ZoomDialog(onDismissRequest = onDismiss) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
         val transformState = rememberTransformableState { zoom, pan, _ ->
@@ -1350,17 +1378,11 @@ private fun FullScreenVideoPreview(
         positionMs = target
     }
 
-    Dialog(
+    ZoomDialog(
         onDismissRequest = {
             player.pause()
             onDismiss()
         },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false,
-        ),
     ) {
         Box(
             modifier = Modifier

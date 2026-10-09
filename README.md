@@ -40,11 +40,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.30")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.31")
 }
 ```
 
-For development snapshots, replace `v1.6.30` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.31` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -134,13 +134,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.30`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.31`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.31 | Zoom-in fullscreen media; higher-res camera photo/video; white picker tabs; compact video trimmer |
 | 1.6.30 | Keep attachment picker open and lift it with the keyboard when captioning (iOS parity) |
 | 1.6.29 | Keep composer bottom-anchored when attachment picker is open (iOS parity) |
 | 1.6.28 | iOS-style new-message slide-up from bottom (not fade-in at final position) |

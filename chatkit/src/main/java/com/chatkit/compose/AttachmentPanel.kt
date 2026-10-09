@@ -314,12 +314,11 @@ private fun MediaTabSegmented(
     ) {
         for (tab in tabs) {
             val active = tab == selected
+            // Selected thumb stays white in light and dark mode (iOS segmented control).
+            // Using attachmentPanelBackgroundColor made the tab black when hosts theme
+            // the panel with their dark primary surface.
             val thumbColor = animateColorAsState(
-                targetValue = if (active) {
-                    theme.attachmentPanelBackgroundColor
-                } else {
-                    Color.Transparent
-                },
+                targetValue = if (active) Color.White else Color.Transparent,
                 animationSpec = tween(200, easing = FastOutSlowInEasing),
                 label = "media-tab-thumb-$tab",
             ).value

@@ -27,7 +27,9 @@ import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -101,7 +103,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
@@ -446,16 +447,21 @@ private fun LiveCameraScreen(
             val sensorAspect = AspectRatio.RATIO_4_3
             val rotation = preview.display?.rotation
                 ?: android.view.Surface.ROTATION_0
-            val resolutionSelector = ResolutionSelector.Builder()
-                .setAspectRatioStrategy(
-                    AspectRatioStrategy(
-                        sensorAspect,
-                        AspectRatioStrategy.FALLBACK_RULE_AUTO,
-                    ),
-                )
+            val aspectStrategy = AspectRatioStrategy(
+                sensorAspect,
+                AspectRatioStrategy.FALLBACK_RULE_AUTO,
+            )
+            // Preview can stay moderate; still-photo capture prefers the sensor's
+            // highest 4:3 frame (matches iOS `.photo` / quality prioritization).
+            val previewResolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(aspectStrategy)
+                .build()
+            val photoResolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(aspectStrategy)
+                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
                 .build()
             val previewUseCase = Preview.Builder()
-                .setResolutionSelector(resolutionSelector)
+                .setResolutionSelector(previewResolutionSelector)
                 .setTargetRotation(rotation)
                 .build()
                 .also { it.surfaceProvider = preview.surfaceProvider }
@@ -473,8 +479,8 @@ private fun LiveCameraScreen(
 
             if (photoMode) {
                 val image = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .setResolutionSelector(resolutionSelector)
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setResolutionSelector(photoResolutionSelector)
                     .setTargetRotation(rotation)
                     .build()
                 imageCapture = image
@@ -483,8 +489,15 @@ private fun LiveCameraScreen(
             } else {
                 imageCapture = null
                 if (showsVideoAttachments) {
+                    // Prefer UHD → FHD → HD so devices that support higher
+                    // resolutions capture above the previous HD-only cap.
                     val recorder = Recorder.Builder()
-                        .setQualitySelector(QualitySelector.from(Quality.HD))
+                        .setQualitySelector(
+                            QualitySelector.fromOrderedList(
+                                listOf(Quality.UHD, Quality.FHD, Quality.HD),
+                                FallbackStrategy.lowerQualityOrHigherThan(Quality.HD),
+                            ),
+                        )
                         .build()
                     val video = VideoCapture.Builder(recorder)
                         .setTargetRotation(rotation)
@@ -988,12 +1001,17 @@ private fun ReviewScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 6.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
+                .padding(
+                    start = 6.dp,
+                    end = 12.dp,
+                    top = 2.dp,
+                    bottom = if (capture.mediaType == MediaType.Video) 0.dp else 4.dp,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
                     .clickable(onClick = onRetake)
                     .semantics { contentDescription = "Retake" },
@@ -1031,7 +1049,12 @@ private fun ReviewScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp),
-            contentAlignment = Alignment.Center,
+            // Keep video review pinned to the top so the trimmer sits higher.
+            contentAlignment = if (capture.mediaType == MediaType.Video) {
+                Alignment.TopCenter
+            } else {
+                Alignment.Center
+            },
         ) {
             when (capture.mediaType) {
                 MediaType.Photo -> {
@@ -1176,13 +1199,56 @@ private fun VideoReviewPlayer(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = if (placeTrimAtTop) {
+            Modifier.fillMaxWidth()
+        } else {
+            Modifier.fillMaxSize()
+        },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // Compact trimmer directly under the close row (not a full-bleed bar).
+        if (placeTrimAtTop && totalSeconds > 0.0) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.72f)
+                    .padding(top = 0.dp, bottom = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = formatDuration(playheadSeconds.toDouble()),
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(50))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+                VideoTrimBar(
+                    frames = frames,
+                    totalSeconds = totalSeconds,
+                    range = trimRange,
+                    playheadSeconds = playheadSeconds.toDouble(),
+                    onTrimChanged = onTrimChanged,
+                    onScrub = { seconds, dragging ->
+                        isScrubbing = dragging
+                        seekToSeconds(seconds, pause = true)
+                    },
+                    barHeight = 32.dp,
+                    handleWidth = 12.dp,
+                    cornerRadius = 8.dp,
+                    trimModifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                )
+            }
+        }
+
         Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
+            modifier = if (placeTrimAtTop) {
+                Modifier.fillMaxWidth()
+            } else {
+                Modifier.weight(1f).fillMaxWidth()
+            },
             contentAlignment = Alignment.Center,
         ) {
             Box(
@@ -1242,50 +1308,6 @@ private fun VideoReviewPlayer(
                         modifier = Modifier.size(40.dp),
                     )
                 }
-
-                if (placeTrimAtTop && totalSeconds > 0.0) {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .fillMaxWidth()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Black.copy(alpha = 0.72f),
-                                        Color.Black.copy(alpha = 0.35f),
-                                        Color.Transparent,
-                                    ),
-                                ),
-                            )
-                            .padding(top = 8.dp, bottom = 10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            text = formatDuration(playheadSeconds.toDouble()),
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier
-                                .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(50))
-                                .padding(horizontal = 12.dp, vertical = 5.dp),
-                        )
-                        VideoTrimBar(
-                            frames = frames,
-                            totalSeconds = totalSeconds,
-                            range = trimRange,
-                            playheadSeconds = playheadSeconds.toDouble(),
-                            onTrimChanged = onTrimChanged,
-                            onScrub = { seconds, dragging ->
-                                isScrubbing = dragging
-                                seekToSeconds(seconds, pause = true)
-                            },
-                            trimModifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 40.dp)
-                                .padding(top = 8.dp),
-                        )
-                    }
-                }
             }
         }
 
@@ -1327,19 +1349,21 @@ private fun VideoTrimBar(
     onTrimChanged: (Double, Double) -> Unit,
     onScrub: (seconds: Double, dragging: Boolean) -> Unit,
     trimModifier: Modifier = Modifier,
+    barHeight: Dp = 48.dp,
+    handleWidth: Dp = 16.dp,
+    cornerRadius: Dp = 10.dp,
 ) {
     val density = LocalDensity.current
-    val handleVisualWidth = 16.dp
+    val handleVisualWidth = handleWidth
     val handleVisualWidthPx = with(density) { handleVisualWidth.toPx() }
-    val hitSlopPx = with(density) { 28.dp.toPx() }
-    val barHeight = 48.dp
-    val railThickness = 2.5.dp
-    val playheadWidth = 4.dp
+    val hitSlopPx = with(density) { 24.dp.toPx() }
+    val railThickness = 2.dp
+    val playheadWidth = 3.dp
     val playheadWidthPx = with(density) { playheadWidth.toPx() }
     val latestRange by rememberUpdatedState(range)
     val latestOnTrimChanged by rememberUpdatedState(onTrimChanged)
     val latestOnScrub by rememberUpdatedState(onScrub)
-    val gestureExclusionVerticalPadPx = with(density) { 16.dp.roundToPx() }
+    val gestureExclusionVerticalPadPx = with(density) { 12.dp.roundToPx() }
     val rootView = LocalView.current
 
     BoxWithConstraints(
@@ -1360,7 +1384,7 @@ private fun VideoTrimBar(
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(10.dp)),
+                .clip(RoundedCornerShape(cornerRadius)),
         ) {
             if (frames.isEmpty()) {
                 Box(
