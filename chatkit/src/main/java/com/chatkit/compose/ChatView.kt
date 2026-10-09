@@ -1,9 +1,11 @@
 package com.chatkit.compose
 
 import android.Manifest
+import android.media.MediaMetadataRetriever
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -17,7 +19,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
@@ -67,6 +68,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,6 +96,9 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -172,6 +177,9 @@ public fun ChatView(
     var isAttachmentPickerPresented by remember(conversationId) { mutableStateOf(false) }
     var isCameraPresented by remember(conversationId) { mutableStateOf(false) }
     var cameraSessionKey by remember(conversationId) { mutableIntStateOf(0) }
+    var galleryReviewItems by remember(conversationId) {
+        mutableStateOf<List<ChatMediaAttachment>>(emptyList())
+    }
     var editingMessage by remember(conversationId) { mutableStateOf<ChatMessage?>(null) }
     var selectedMessageIds by remember(conversationId) { mutableStateOf<Set<String>>(emptySet()) }
     val isMessageSelectionMode = selectedMessageIds.isNotEmpty()
@@ -230,6 +238,79 @@ public fun ChatView(
     val mimeArray = remember(documentMimeTypes) { documentMimeTypes.toTypedArray() }
     val deviceHasCamera = remember(context) { ChatCameraFiles.deviceHasCamera(context) }
     val showsCameraButton = enableCameraCapture && deviceHasCamera
+    val scope = rememberCoroutineScope()
+    val photoPickerMediaType = remember(showsVideoAttachments) {
+        if (showsVideoAttachments) {
+            ActivityResultContracts.PickVisualMedia.ImageAndVideo
+        } else {
+            ActivityResultContracts.PickVisualMedia.ImageOnly
+        }
+    }
+    val photoPickerMaxItems = maximumMediaSelection.coerceAtLeast(1)
+
+    fun openGalleryReview(uris: List<Uri>) {
+        pendingMedia.clear()
+        pendingDocuments.clear()
+        val items = uris.map { mediaAttachmentFromPickerUri(context, it, enrich = false) }
+        galleryReviewItems = items
+        scope.launch {
+            val enriched = withContext(Dispatchers.IO) {
+                items.map { mediaAttachmentFromPickerUri(context, it.localUri, enrich = true) }
+            }
+            if (galleryReviewItems.map { it.id } == items.map { it.id }) {
+                galleryReviewItems = enriched
+            }
+        }
+    }
+
+    fun submitGalleryReview(caption: String, media: List<ChatMediaAttachment>) {
+        val text = caption.trim()
+        val optimistic = ChatMessage(
+            id = UUID.randomUUID().toString(),
+            text = if (onSubmit == null) "" else text,
+            timestamp = Instant.now(),
+            direction = MessageDirection.Outgoing,
+            deliveryStatus = DeliveryStatus.None,
+            replyToMessageId = replyingTo?.id,
+            replyToMessageText = replyingTo?.replyPreviewText(),
+            replyToSenderName = replyingTo?.let { if (it.isIncoming) it.senderName else "You" },
+            replyToWasIncoming = replyingTo?.isIncoming,
+            replyToAttachment = replyingTo?.replyPreviewAttachment(),
+            attachments = media.map(ChatCameraFiles::makeOptimisticAttachment),
+        )
+        optimisticMessages += optimistic
+        onOptimisticMessage(optimistic)
+        val draft = ChatDraft(
+            text = text,
+            media = media,
+            replyToMessageId = replyingTo?.id,
+        )
+        if (onSubmit != null) {
+            onSubmit(draft)
+        } else {
+            onMediaPicked(media)
+            if (text.isNotEmpty()) onSend(text)
+        }
+        replyingTo = null
+        galleryReviewItems = emptyList()
+    }
+
+    val singlePhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        isAttachmentPickerPresented = false
+        if (uri == null) return@rememberLauncherForActivityResult
+        openGalleryReview(listOf(uri))
+    }
+    val multiPhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(
+            maxItems = photoPickerMaxItems.coerceIn(2, 100),
+        ),
+    ) { uris ->
+        isAttachmentPickerPresented = false
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        openGalleryReview(uris)
+    }
     val multiDocumentPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -271,13 +352,29 @@ public fun ChatView(
         }
     }
 
+    fun launchPhotoPicker() {
+        // Android Photo Picker — no READ_MEDIA_* permission (Play policy).
+        val request = PickVisualMediaRequest(photoPickerMediaType)
+        if (photoPickerMaxItems <= 1) {
+            singlePhotoPicker.launch(request)
+        } else {
+            multiPhotoPicker.launch(request)
+        }
+    }
+
     fun presentAttachmentPicker() {
         onAttachmentTap()
         keyboardController?.hide()
         focusManager.clearFocus(force = true)
         pendingMedia.clear()
         pendingDocuments.clear()
-        isAttachmentPickerPresented = true
+        if (showsDocumentAttachments) {
+            // Chooser sheet: Photos & videos (system picker) or Document.
+            isAttachmentPickerPresented = true
+        } else {
+            // No document option — open the system photo picker directly.
+            launchPhotoPicker()
+        }
     }
 
     fun dismissAttachmentPicker() {
@@ -558,13 +655,6 @@ public fun ChatView(
             .fillMaxSize()
             .background(theme.backgroundColor),
     ) {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-        // iOS attachmentPickerHeight: reserve composer + some transcript, clamp 150…340.
-        val attachmentPickerHeight = run {
-            val composerReserve = 62.dp
-            val transcriptReserve = (maxHeight * 0.18f).coerceIn(64.dp, 112.dp)
-            (maxHeight - composerReserve - transcriptReserve).coerceIn(150.dp, 340.dp)
-        }
         Column(Modifier.fillMaxSize()) {
             MessageList(
                 messages = displayedMessages,
@@ -646,19 +736,13 @@ public fun ChatView(
                 theme = theme,
                 showsVideoAttachments = showsVideoAttachments,
                 showsDocumentAttachments = showsDocumentAttachments,
-                maximumMediaSelection = maximumMediaSelection,
-                documentSelectionCount = pendingDocuments.size,
-                selectedMedia = pendingMedia.toList(),
                 onClose = ::dismissAttachmentPicker,
-                onMediaSelectionChanged = { attachments ->
-                    pendingMedia.clear()
-                    pendingMedia += attachments
-                    if (attachments.isNotEmpty()) pendingDocuments.clear()
+                onPhotoLibraryRequested = {
+                    isAttachmentPickerPresented = false
+                    launchPhotoPicker()
                 },
                 onDocumentPickerRequested = ::launchDocumentPicker,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(attachmentPickerHeight),
+                modifier = Modifier.fillMaxWidth(),
             )
         }
 
@@ -829,7 +913,11 @@ public fun ChatView(
                                                 ) {
                                                     if (draft.isEmpty()) {
                                                         Text(
-                                                            text = composerPlaceholder,
+                                                            text = if (pendingMedia.isNotEmpty() || pendingDocuments.isNotEmpty()) {
+                                                                "Add a caption…"
+                                                            } else {
+                                                                composerPlaceholder
+                                                            },
                                                             color = theme.incomingTimestampColor,
                                                             fontSize = 14.sp,
                                                             lineHeight = 20.sp,
@@ -888,8 +976,6 @@ public fun ChatView(
         }
         }
 
-        }
-
         // iOS: overlay on the full chat surface, bottomTrailing, 66pt above the mic.
         VoiceSlideToLockPad(
             theme = theme,
@@ -909,6 +995,15 @@ public fun ChatView(
                 sessionKey = cameraSessionKey,
                 onDismiss = { isCameraPresented = false },
                 onCaptured = ::submitCameraCapture,
+            )
+        }
+
+        if (galleryReviewItems.isNotEmpty()) {
+            GalleryMediaReviewDialog(
+                theme = theme,
+                items = galleryReviewItems,
+                onDismiss = { galleryReviewItems = emptyList() },
+                onSend = ::submitGalleryReview,
             )
         }
 
@@ -1133,6 +1228,77 @@ private fun ReplyComposerPreview(
                 .semantics { contentDescription = "Cancel reply" },
             tint = theme.incomingTimestampColor,
         )
+    }
+}
+
+
+/** Show chips + enable Send immediately; do not wait on thumbnail metadata. */
+private fun applyPickedMediaImmediate(
+    context: android.content.Context,
+    uris: List<Uri>,
+    pendingMedia: MutableList<ChatMediaAttachment>,
+    pendingDocuments: MutableList<Uri>,
+) {
+    pendingDocuments.clear()
+    pendingMedia.clear()
+    pendingMedia += uris.map { uri -> mediaAttachmentFromPickerUri(context, uri, enrich = false) }
+}
+
+private suspend fun enrichPendingMediaMetadata(
+    context: android.content.Context,
+    pendingMedia: MutableList<ChatMediaAttachment>,
+) {
+    val snapshot = pendingMedia.toList()
+    if (snapshot.isEmpty()) return
+    val enriched = withContext(Dispatchers.IO) {
+        snapshot.map { item ->
+            mediaAttachmentFromPickerUri(context, item.localUri, enrich = true)
+        }
+    }
+    // Replace in place so selection order and composer focus stay stable.
+    pendingMedia.clear()
+    pendingMedia += enriched
+}
+
+private fun mediaAttachmentFromPickerUri(
+    context: android.content.Context,
+    uri: Uri,
+    enrich: Boolean,
+): ChatMediaAttachment {
+    runCatching {
+        context.contentResolver.takePersistableUriPermission(
+            uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        )
+    }
+    val mime = context.contentResolver.getType(uri).orEmpty()
+    val isVideo = mime.startsWith("video/", ignoreCase = true) ||
+        (!mime.startsWith("image/", ignoreCase = true) &&
+            uri.toString().contains("video", ignoreCase = true))
+    val durationMillis = if (enrich && isVideo) videoDurationMillis(context, uri) else null
+    val aspectRatio = if (enrich) {
+        ChatMediaDimensions.aspectRatio(context, uri, isVideo = isVideo)
+    } else {
+        null
+    }
+    return ChatMediaAttachment(
+        id = uri.toString(),
+        mediaType = if (isVideo) MediaType.Video else MediaType.Photo,
+        durationMillis = durationMillis,
+        localUri = uri,
+        aspectRatio = aspectRatio,
+    )
+}
+
+private fun videoDurationMillis(context: android.content.Context, uri: Uri): Long? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, uri)
+        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { retriever.release() }
     }
 }
 

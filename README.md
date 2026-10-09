@@ -40,7 +40,7 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.33")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.35")
 }
 ```
 
@@ -134,13 +134,15 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.33`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.35`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.35 | Gallery pick review like camera: full-screen preview, horizontal multi-select strip, caption + send |
+| 1.6.34 | Use Android Photo Picker for chat attachments (Play Photo & Video policy; no READ_MEDIA_* ) |
 | 1.6.33 | Attachment picker iOS parity: slide-up sheet (no fade), adaptive 150–340 height, up to 300 media, smoother thumbs |
 | 1.6.32 | Faster attachment picker: capped MediaStore query, smaller cancellable thumbs, no UI-thread decode on select |
 | 1.6.31 | Zoom-in fullscreen media; higher-res camera photo/video; white picker tabs; compact video trimmer |
