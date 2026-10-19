@@ -394,7 +394,9 @@ public fun ChatView(
     }
 
     fun canSelectMessage(message: ChatMessage): Boolean {
-        if (message.text.contains("was deleted", ignoreCase = true)) return false
+        // iOS: delete-for-everyone tombstones stay selectable so the bubble can be
+        // removed locally. Reply/edit stay disabled for those rows in the toolbar.
+        if (message.isDeletedPlaceholder()) return onDeleteMessage != null
         // Selection eligibility is row-based, not edit eligibility. Attachments and
         // incoming messages must still be selectable for reply/delete; the toolbar
         // separately decides whether Edit is valid for the final selection.
@@ -425,6 +427,7 @@ public fun ChatView(
 
     fun replyToSelectedMessage() {
         val selected = displayedMessages.singleOrNull { it.id in selectedMessageIds } ?: return
+        if (selected.isDeletedPlaceholder()) return
         selectedMessageIds = emptySet()
         replyingTo = selected
         onReplyToMessage(selected)
@@ -672,6 +675,7 @@ public fun ChatView(
                     onMessageRetry = onMessageRetry,
                     onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
                         { message ->
+                            if (message.isDeletedPlaceholder()) return@let
                             replyingTo = message
                             onReplyToMessage(message)
                         }
@@ -778,10 +782,15 @@ public fun ChatView(
                 val selectedMessages = displayedMessages.filter { it.id in selectedMessageIds }
                 MessageSelectionToolbar(
                     count = selectedMessageIds.size,
-                    canReply = selectedMessages.size == 1 && swipeToReplyEnabled && showsComposer,
+                    canReply = selectedMessages.size == 1 &&
+                        swipeToReplyEnabled &&
+                        showsComposer &&
+                        selectedMessages.none(ChatMessage::isDeletedPlaceholder),
                     canEdit = selectedMessages.size == 1 &&
                         selectedMessages.firstOrNull()?.let {
-                            onEditMessage != null && it.attachments.isEmpty() &&
+                            onEditMessage != null &&
+                                !it.isDeletedPlaceholder() &&
+                                it.attachments.isEmpty() &&
                                 it.canEdit(Instant.now(), modificationWindowMillis)
                         } == true,
                     canDelete = onDeleteMessage != null,
@@ -1021,6 +1030,9 @@ public fun ChatView(
                 theme = theme,
                 items = galleryReviewItems,
                 onDismiss = { galleryReviewItems = emptyList() },
+                onRemove = { removed ->
+                    galleryReviewItems = galleryReviewItems.filter { it.id != removed.id }
+                },
                 onSend = ::submitGalleryReview,
             )
         }

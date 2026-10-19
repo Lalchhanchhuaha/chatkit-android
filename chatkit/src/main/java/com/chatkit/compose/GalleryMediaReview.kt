@@ -5,12 +5,12 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.Size
 import android.os.Build
+import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,8 +38,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,7 +57,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -74,27 +74,40 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+private val GalleryStripChipShape = RoundedCornerShape(10.dp)
+/** Portrait strip chips matching iOS gallery review (9:16). */
+private val GalleryStripChipHeight = 96.dp
+
 /**
  * Full-screen gallery review matching camera capture review:
- * large preview, optional horizontal strip for multiple picks, caption + send.
+ * large preview, horizontal strip for picks, caption + send.
  */
 @Composable
 internal fun GalleryMediaReviewDialog(
     theme: ChatTheme,
     items: List<ChatMediaAttachment>,
     onDismiss: () -> Unit,
+    onRemove: (ChatMediaAttachment) -> Unit,
     onSend: (caption: String, media: List<ChatMediaAttachment>) -> Unit,
 ) {
     if (items.isEmpty()) return
 
     var visible by remember { mutableStateOf(true) }
     var caption by remember { mutableStateOf("") }
-    var selectedIndex by remember(items.map { it.id }) { mutableIntStateOf(0) }
+    var selectedIndex by remember { mutableIntStateOf(0) }
     var sending by remember { mutableStateOf(false) }
+
+    LaunchedEffect(items.map { it.id }) {
+        if (items.isEmpty()) return@LaunchedEffect
+        if (selectedIndex > items.lastIndex) {
+            selectedIndex = items.lastIndex
+        }
+    }
 
     if (!visible) return
 
@@ -119,15 +132,22 @@ internal fun GalleryMediaReviewDialog(
             items = items,
             selectedIndex = selectedIndex.coerceIn(0, items.lastIndex),
             onSelectIndex = { selectedIndex = it },
+            onRemove = { item ->
+                val removingSelected = items.getOrNull(selectedIndex)?.id == item.id
+                onRemove(item)
+                if (removingSelected && selectedIndex > 0) {
+                    selectedIndex -= 1
+                }
+            },
             caption = caption,
             onCaptionChange = { caption = it },
-            sendEnabled = !sending,
+            sendEnabled = !sending && items.isNotEmpty(),
             onClose = {
                 visible = false
                 onDismiss()
             },
             onSend = {
-                if (sending) return@GalleryMediaReviewScreen
+                if (sending || items.isEmpty()) return@GalleryMediaReviewScreen
                 sending = true
                 val media = items.toList()
                 val text = caption
@@ -144,6 +164,7 @@ private fun GalleryMediaReviewScreen(
     items: List<ChatMediaAttachment>,
     selectedIndex: Int,
     onSelectIndex: (Int) -> Unit,
+    onRemove: (ChatMediaAttachment) -> Unit,
     caption: String,
     onCaptionChange: (String) -> Unit,
     sendEnabled: Boolean,
@@ -155,10 +176,13 @@ private fun GalleryMediaReviewScreen(
     val selected = items[selectedIndex]
     val stripState = rememberLazyListState()
 
+    fun dismissKeyboard() {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+    }
+
     LaunchedEffect(selectedIndex) {
-        if (items.size > 1) {
-            stripState.animateScrollToItem(selectedIndex)
-        }
+        stripState.animateScrollToItem(selectedIndex.coerceIn(0, items.lastIndex))
     }
 
     Column(
@@ -166,13 +190,7 @@ private fun GalleryMediaReviewScreen(
             .fillMaxSize()
             .background(Color.Black)
             .statusBarsPadding()
-            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
-            .pointerInput(Unit) {
-                detectTapGestures {
-                    focusManager.clearFocus(force = true)
-                    keyboardController?.hide()
-                }
-            },
+            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)),
     ) {
         Row(
             modifier = Modifier
@@ -212,29 +230,35 @@ private fun GalleryMediaReviewScreen(
                 .padding(horizontal = 8.dp),
             contentAlignment = Alignment.Center,
         ) {
+            // Do not put a parent clickable here — it steals play/pause taps from video.
             when (selected.mediaType) {
                 MediaType.Photo -> GalleryPhotoPreview(uri = selected.localUri)
                 MediaType.Video -> GalleryVideoPreview(uri = selected.localUri)
             }
         }
 
-        if (items.size > 1) {
-            LazyRow(
-                state = stripState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp, bottom = 4.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
-                    GalleryStripThumb(
-                        item = item,
-                        selected = index == selectedIndex,
-                        theme = theme,
-                        onClick = { onSelectIndex(index) },
-                    )
-                }
+        LazyRow(
+            state = stripState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp, bottom = 4.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+                GalleryStripThumb(
+                    item = item,
+                    selected = index == selectedIndex,
+                    theme = theme,
+                    onClick = {
+                        dismissKeyboard()
+                        onSelectIndex(index)
+                    },
+                    onRemove = {
+                        dismissKeyboard()
+                        onRemove(item)
+                    },
+                )
             }
         }
 
@@ -321,33 +345,82 @@ private fun GalleryPhotoPreview(uri: Uri) {
 @Composable
 private fun GalleryVideoPreview(uri: Uri) {
     val context = LocalContext.current
+    var isPlaying by remember(uri) { mutableStateOf(false) }
     val player = remember(uri) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(uri))
-            repeatMode = Player.REPEAT_MODE_ONE
+            repeatMode = Player.REPEAT_MODE_OFF
+            playWhenReady = false
             prepare()
-            playWhenReady = true
         }
     }
     DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+        }
+        player.addListener(listener)
         onDispose {
+            player.removeListener(listener)
             player.release()
         }
     }
-    AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                this.player = player
-                useController = true
-                setShowNextButton(false)
-                setShowPreviousButton(false)
-            }
-        },
-        update = { it.player = player },
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(8.dp)),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    this.player = player
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                }
+            },
+            update = { view ->
+                view.player = player
+                view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+        // Compose overlay (not PlayerView controls) so taps aren't eaten by parent chrome.
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f))
+                .semantics {
+                    role = Role.Button
+                    contentDescription = if (isPlaying) "Pause video" else "Play video"
+                }
+                .clickable {
+                    if (player.isPlaying) {
+                        player.pause()
+                    } else {
+                        if (player.playbackState == Player.STATE_ENDED) {
+                            player.seekTo(0)
+                        }
+                        player.play()
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(40.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -356,23 +429,25 @@ private fun GalleryStripThumb(
     selected: Boolean,
     theme: ChatTheme,
     onClick: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     val context = LocalContext.current
-    val thumb by produceState<Bitmap?>(null, item.id, item.mediaType) {
+    val thumb by produceState<Bitmap?>(null, item.id, item.mediaType, item.localUri) {
         value = withContext(Dispatchers.IO) {
             loadGalleryThumb(context, item)
         }
     }
     Box(
         modifier = Modifier
-            .size(64.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .height(GalleryStripChipHeight)
+            .aspectRatio(9f / 16f)
+            .clip(GalleryStripChipShape)
             .background(Color(0xFF2C2C2E))
             .then(
                 if (selected) {
-                    Modifier.border(2.dp, theme.accentColor, RoundedCornerShape(10.dp))
+                    Modifier.border(2.dp, theme.accentColor, GalleryStripChipShape)
                 } else {
-                    Modifier.border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+                    Modifier.border(1.dp, Color.White.copy(alpha = 0.2f), GalleryStripChipShape)
                 },
             )
             .clickable(onClick = onClick)
@@ -383,7 +458,6 @@ private fun GalleryStripThumb(
                     "Select photo"
                 }
             },
-        contentAlignment = Alignment.Center,
     ) {
         if (thumb != null) {
             Image(
@@ -402,14 +476,26 @@ private fun GalleryStripThumb(
                     .size(22.dp)
                     .align(Alignment.Center),
             )
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)
+                .size(20.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.62f))
+                .semantics {
+                    role = Role.Button
+                    contentDescription = "Remove"
+                }
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
-                imageVector = Icons.Default.Videocam,
+                imageVector = Icons.Default.Close,
                 contentDescription = null,
                 tint = Color.White,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(4.dp)
-                    .size(12.dp),
+                modifier = Modifier.size(12.dp),
             )
         }
     }

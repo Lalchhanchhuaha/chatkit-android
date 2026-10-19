@@ -203,8 +203,13 @@ internal val TransferState.isTransferring: Boolean
 internal val TransferState.isFailedTransfer: Boolean
     get() = this is TransferState.Failed || this is TransferState.DownloadFailed
 
+/** Host tombstone for delete-for-everyone (iOS keeps these selectable so they can be removed locally). */
+internal fun ChatMessage.isDeletedPlaceholder(): Boolean =
+    text.contains("was deleted", ignoreCase = true)
+
 internal fun ChatMessage.canEdit(now: Instant, windowMillis: Long): Boolean =
-    direction == MessageDirection.Outgoing && text.isNotBlank() && windowMillis >= 0 &&
+    !isDeletedPlaceholder() &&
+        direction == MessageDirection.Outgoing && text.isNotBlank() && windowMillis >= 0 &&
         timestamp.plusMillis(windowMillis).isAfter(now)
 
 internal fun reconcileMessages(

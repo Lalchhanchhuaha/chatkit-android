@@ -56,8 +56,9 @@ internal object ChatCameraFiles {
      * device's on-disk JPEG, so normalize orientation and crop the pixels explicitly.
      */
     fun normalizePhotoToCaptureAspect(context: Context, file: File): Boolean {
-        // maxSide = 0 keeps the full captured resolution (no downsample).
-        val bitmap = decodeBitmapRespectingExif(context, file.toUri(), maxSide = 0)
+        // Cap decode for chat: full-sensor JPEGs made post-shutter crop/re-encode
+        // take longer than the capture itself. 2560 is sharp in bubbles and review.
+        val bitmap = decodeBitmapRespectingExif(context, file.toUri(), maxSide = 2560)
             ?: return false
         return try {
             val targetAspect = if (bitmap.width >= bitmap.height) 4f / 3f else 3f / 4f

@@ -5,6 +5,8 @@ import android.app.Activity
 import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.media.MediaActionSound
 import android.net.Uri
 import android.provider.Settings
 import android.graphics.Rect as AndroidRect
@@ -27,7 +29,6 @@ import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
@@ -401,6 +402,10 @@ private fun LiveCameraScreen(
     var activeRecording by remember { mutableStateOf<Recording?>(null) }
     var rebinding by remember { mutableStateOf(false) }
     var captureInFlight by remember { mutableStateOf(false) }
+    // Phone-camera shutter feel: freeze the viewfinder + flash the instant the user taps.
+    var frozenPreview by remember { mutableStateOf<Bitmap?>(null) }
+    var showShutterFlash by remember { mutableStateOf(false) }
+    val shutterSound = remember { MediaActionSound().also { it.load(MediaActionSound.SHUTTER_CLICK) } }
     var torchSupported by remember { mutableStateOf(false) }
     var minZoom by remember { mutableFloatStateOf(1f) }
     var maxZoom by remember { mutableFloatStateOf(1f) }
@@ -451,17 +456,13 @@ private fun LiveCameraScreen(
                 sensorAspect,
                 AspectRatioStrategy.FALLBACK_RULE_AUTO,
             )
-            // Preview can stay moderate; still-photo capture prefers the sensor's
-            // highest 4:3 frame (matches iOS `.photo` / quality prioritization).
-            val previewResolutionSelector = ResolutionSelector.Builder()
+            // Keep shutter snappy for chat: prefer latency over max sensor megapixels.
+            // Highest-available stills + MAXIMIZE_QUALITY made takePicture feel stuck.
+            val resolutionSelector = ResolutionSelector.Builder()
                 .setAspectRatioStrategy(aspectStrategy)
-                .build()
-            val photoResolutionSelector = ResolutionSelector.Builder()
-                .setAspectRatioStrategy(aspectStrategy)
-                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
                 .build()
             val previewUseCase = Preview.Builder()
-                .setResolutionSelector(previewResolutionSelector)
+                .setResolutionSelector(resolutionSelector)
                 .setTargetRotation(rotation)
                 .build()
                 .also { it.surfaceProvider = preview.surfaceProvider }
@@ -479,8 +480,8 @@ private fun LiveCameraScreen(
 
             if (photoMode) {
                 val image = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                    .setResolutionSelector(photoResolutionSelector)
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .setResolutionSelector(resolutionSelector)
                     .setTargetRotation(rotation)
                     .build()
                 imageCapture = image
@@ -599,6 +600,9 @@ private fun LiveCameraScreen(
             runCatching { cameraProvider?.unbindAll() }
             cameraProvider = null
             cameraExecutor.shutdown()
+            runCatching { shutterSound.release() }
+            frozenPreview?.takeIf { !it.isRecycled }?.recycle()
+            frozenPreview = null
         }
     }
 
@@ -710,6 +714,22 @@ private fun LiveCameraScreen(
                     .fillMaxSize()
                     .semantics { contentDescription = "Camera viewfinder" },
             )
+            // Stock camera apps freeze the last frame while the JPEG is written.
+            frozenPreview?.let { frame ->
+                Image(
+                    bitmap = frame.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            if (showShutterFlash) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.White.copy(alpha = 0.88f)),
+                )
+            }
         }
 
         Box(
@@ -806,6 +826,16 @@ private fun LiveCameraScreen(
                         CaptureMode.PHOTO -> {
                             val capture = imageCapture ?: return@ShutterButton
                             captureInFlight = true
+                            // Match stock Camera: freeze + flash + click happen on the tap,
+                            // before JPEG write / aspect normalize finish.
+                            frozenPreview?.takeIf { !it.isRecycled }?.recycle()
+                            frozenPreview = runCatching { previewView?.bitmap }.getOrNull()
+                            showShutterFlash = true
+                            runCatching { shutterSound.play(MediaActionSound.SHUTTER_CLICK) }
+                            scope.launch {
+                                delay(70)
+                                showShutterFlash = false
+                            }
                             val (id, file) = ChatCameraFiles.photoFile(context.cacheDir)
                             val options = ImageCapture.OutputFileOptions.Builder(file).build()
                             if (viewModel.flashEnabled && torchSupported) {
@@ -820,19 +850,26 @@ private fun LiveCameraScreen(
                                     override fun onImageSaved(
                                         outputFileResults: ImageCapture.OutputFileResults,
                                     ) {
-                                        // CameraX crop metadata is device-dependent for an
-                                        // on-disk JPEG. Normalize pixels explicitly, as iOS
-                                        // does, so review/upload dimensions are truly 3:4.
-                                        ChatCameraFiles.normalizePhotoToCaptureAspect(context, file)
-                                        scope.launch(Dispatchers.Main) {
-                                            viewModel.onPhotoCaptured(id, file)
-                                            runCatching { cameraProvider?.unbindAll() }
+                                        // Crop/re-encode off the shutter path size: full-res
+                                        // normalize blocked review for 1–2s on high-MP sensors.
+                                        scope.launch(Dispatchers.IO) {
+                                            ChatCameraFiles.normalizePhotoToCaptureAspect(
+                                                context,
+                                                file,
+                                            )
+                                            withContext(Dispatchers.Main) {
+                                                viewModel.onPhotoCaptured(id, file)
+                                                runCatching { cameraProvider?.unbindAll() }
+                                            }
                                         }
                                     }
 
                                     override fun onError(exception: ImageCaptureException) {
                                         ChatCameraFiles.deleteQuietly(file)
                                         scope.launch(Dispatchers.Main) {
+                                            frozenPreview?.takeIf { !it.isRecycled }?.recycle()
+                                            frozenPreview = null
+                                            showShutterFlash = false
                                             captureInFlight = false
                                         }
                                     }

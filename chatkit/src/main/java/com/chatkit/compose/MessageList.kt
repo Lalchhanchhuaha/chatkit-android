@@ -408,7 +408,9 @@ internal fun MessageList(
                             showsSender = showsSender,
                             theme = theme,
                             onRetry = { onMessageRetry(item.message.id) },
-                            onReply = onReplyMessage?.let { reply ->
+                            onReply = onReplyMessage?.takeUnless {
+                                item.message.isDeletedPlaceholder()
+                            }?.let { reply ->
                                 { reply(item.message) }
                             },
                             isMessageSelectionMode = isMessageSelectionMode,

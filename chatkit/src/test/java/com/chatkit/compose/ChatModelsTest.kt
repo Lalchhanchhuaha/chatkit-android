@@ -82,6 +82,25 @@ class ChatModelsTest {
         assertFalse(recent.copy(direction = MessageDirection.Incoming).canEdit(now, 120_000))
         assertFalse(recent.copy(text = "").canEdit(now, 120_000))
         assertFalse(recent.canEdit(now.plusSeconds(121), 120_000))
+        assertFalse(
+            recent.copy(text = "This message was deleted").canEdit(now, 120_000),
+        )
+    }
+
+    @Test
+    fun deletedPlaceholderMatchesIosTombstoneText() {
+        val stamp = Instant.parse("2026-01-01T00:00:00Z")
+        assertTrue(
+            ChatMessage("1", "This message was deleted", stamp, MessageDirection.Outgoing)
+                .isDeletedPlaceholder(),
+        )
+        assertTrue(
+            ChatMessage("2", "Message was Deleted", stamp, MessageDirection.Incoming)
+                .isDeletedPlaceholder(),
+        )
+        assertFalse(
+            ChatMessage("3", "hello", stamp, MessageDirection.Outgoing).isDeletedPlaceholder(),
+        )
     }
 }
 
