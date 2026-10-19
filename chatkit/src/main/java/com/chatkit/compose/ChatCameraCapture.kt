@@ -5,7 +5,6 @@ import android.app.Activity
 import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.hardware.camera2.CaptureRequest
 import android.net.Uri
 import android.provider.Settings
 import android.graphics.Rect as AndroidRect
@@ -17,10 +16,6 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.OptIn
-import androidx.camera.camera2.interop.Camera2CameraControl
-import androidx.camera.camera2.interop.CaptureRequestOptions
-import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -32,6 +27,7 @@ import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import java.util.concurrent.TimeUnit
 import androidx.camera.video.FallbackStrategy
@@ -456,13 +452,17 @@ private fun LiveCameraScreen(
                 sensorAspect,
                 AspectRatioStrategy.FALLBACK_RULE_AUTO,
             )
-            // Keep shutter snappy for chat: prefer latency over max sensor megapixels.
-            // Highest-available stills + MAXIMIZE_QUALITY made takePicture feel stuck.
-            val resolutionSelector = ResolutionSelector.Builder()
+            // Preview stays moderate; stills use the highest 4:3 frame so chat
+            // photos match native Camera quality (review still opens on save).
+            val previewResolutionSelector = ResolutionSelector.Builder()
                 .setAspectRatioStrategy(aspectStrategy)
                 .build()
+            val photoResolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(aspectStrategy)
+                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                .build()
             val previewUseCase = Preview.Builder()
-                .setResolutionSelector(resolutionSelector)
+                .setResolutionSelector(previewResolutionSelector)
                 .setTargetRotation(rotation)
                 .build()
                 .also { it.surfaceProvider = preview.surfaceProvider }
@@ -480,8 +480,8 @@ private fun LiveCameraScreen(
 
             if (photoMode) {
                 val image = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .setResolutionSelector(resolutionSelector)
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setResolutionSelector(photoResolutionSelector)
                     .setTargetRotation(rotation)
                     .build()
                 imageCapture = image
@@ -518,9 +518,9 @@ private fun LiveCameraScreen(
             boundConfig = config
             viewModel.markCameraAvailable()
             camera = bound
-            // iOS prepareDeviceForCapture: continuous AF / AE / AWB from the first frame.
+            // Let CameraX own AF/AE. Camera2 CaptureRequest overrides for continuous
+            // AF blocked tap-to-focus and underexposed the preview on several OEMs.
             runCatching { bound.cameraControl.cancelFocusAndMetering() }
-            enableContinuousAutoControls(bound, photoMode = photoMode)
             torchSupported = bound.cameraInfo.hasFlashUnit()
             if (!torchSupported) {
                 viewModel.disableFlash()
@@ -701,16 +701,18 @@ private fun LiveCameraScreen(
                                 val cam = camera ?: return@setOnTouchListener false
                                 val factory = meteringPointFactory
                                 val point = factory.createPoint(event.x, event.y)
-                                // iOS tap: one-shot autoFocus, keep continuousAutoExposure.
-                                // Default CameraX metering also locks AE/AWB and leaves the
-                                // preview looking “stuck” until the next rebind.
+                                // Native Camera: tap focuses and meters exposure at that point.
+                                // Auto-cancel returns to continuous tracking after a short dwell.
                                 val action = FocusMeteringAction.Builder(
                                     point,
-                                    FocusMeteringAction.FLAG_AF,
+                                    FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE,
                                 )
                                     .setAutoCancelDuration(3, TimeUnit.SECONDS)
                                     .build()
-                                runCatching { cam.cameraControl.startFocusAndMetering(action) }
+                                runCatching {
+                                    cam.cameraControl.cancelFocusAndMetering()
+                                    cam.cameraControl.startFocusAndMetering(action)
+                                }
                                 v.performClick()
                             }
                             true
@@ -1767,30 +1769,6 @@ private fun formatDuration(seconds: Double): String {
     val m = total / 60
     val s = total % 60
     return "%d:%02d".format(m, s)
-}
-
-/**
- * Mirror iOS `prepareDeviceForCapture`: continuous autofocus, auto-exposure, and
- * auto white-balance so brightness/focus track the scene instead of staying locked.
- */
-@OptIn(ExperimentalCamera2Interop::class)
-private fun enableContinuousAutoControls(camera: Camera, photoMode: Boolean) {
-    val afMode = if (photoMode) {
-        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-    } else {
-        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
-    }
-    val options = CaptureRequestOptions.Builder()
-        .setCaptureRequestOption(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-        .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, afMode)
-        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-        .setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, false)
-        .setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, false)
-        .build()
-    runCatching {
-        Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options)
-    }
 }
 
 /**

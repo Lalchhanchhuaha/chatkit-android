@@ -420,13 +420,16 @@ internal fun MessageList(
                 ) {
                     when (item) {
                         is TranscriptItem.DaySeparator -> DateSeparator(item.label, theme)
-                        is TranscriptItem.Message -> MessageBubble(
-                            message = item.message,
-                            rowVerticalInset = messageRowVerticalInset(
+                        is TranscriptItem.Message -> {
+                            val insets = messageRowVerticalInsets(
                                 items = invertedItems,
                                 index = index,
                                 message = item.message,
-                            ),
+                            )
+                            MessageBubble(
+                            message = item.message,
+                            rowTopInset = insets.top,
+                            rowBottomInset = insets.bottom,
                             showsSender = showsSender,
                             theme = theme,
                             onRetry = { onMessageRetry(item.message.id) },
@@ -456,7 +459,8 @@ internal fun MessageList(
                             onRetryAttachmentDownload = onRetryAttachmentDownload,
                             audioPlayer = audioPlayer,
                             deliveryStatusContent = deliveryStatusContent,
-                        )
+                            )
+                        }
                     }
                 }
             }
@@ -500,17 +504,31 @@ internal fun shouldLoadPreviousMessages(
 ): Boolean = totalItemsCount > loadPreviousThreshold &&
     lastVisibleItemIndex > totalItemsCount - loadPreviousThreshold - 1
 
-private fun messageRowVerticalInset(
+/**
+ * WhatsApp / iOS transcript spacing.
+ *
+ * [invertedItems] + `reverseLayout`: larger index is visually above (older).
+ * Row gap above this bubble = this.top + olderNeighbor.bottom. Only [top] grows on a
+ * direction change so the large gap is applied once (not 10+10 on both sides).
+ */
+private data class MessageRowVerticalInsets(val top: Dp, val bottom: Dp)
+
+private fun messageRowVerticalInsets(
     items: List<TranscriptItem>,
     index: Int,
     message: ChatMessage,
-): Dp {
-    val hasDirectionChange = listOf(index - 1, index + 1).any { neighborIndex ->
-        val neighbor = items.getOrNull(neighborIndex) as? TranscriptItem.Message
-        neighbor != null && neighbor.message.direction != message.direction
+): MessageRowVerticalInsets {
+    val older = items.getOrNull(index + 1) as? TranscriptItem.Message
+    val top = if (older != null && older.message.direction != message.direction) {
+        DirectionChangeGap
+    } else {
+        SameDirectionGap
     }
-    return if (hasDirectionChange) 10.dp else 2.dp
+    return MessageRowVerticalInsets(top = top, bottom = SameDirectionGap)
 }
+
+private val SameDirectionGap = 2.dp
+private val DirectionChangeGap = 8.dp
 
 private fun TranscriptItem.stableKey(): String = when (this) {
     is TranscriptItem.DaySeparator -> id
@@ -627,7 +645,8 @@ internal fun UnreadJumpButton(
 @Composable
 internal fun MessageBubble(
     message: ChatMessage,
-    rowVerticalInset: Dp = 2.dp,
+    rowTopInset: Dp = SameDirectionGap,
+    rowBottomInset: Dp = SameDirectionGap,
     showsSender: Boolean,
     theme: ChatTheme,
     onRetry: () -> Unit,
@@ -852,7 +871,12 @@ internal fun MessageBubble(
                 .offset { IntOffset(swipeOffset.roundToInt(), 0) }
                 .then(swipeModifier)
                 .then(rowGestureModifier)
-                .padding(horizontal = 10.dp, vertical = rowVerticalInset),
+                .padding(
+                    start = 10.dp,
+                    end = 10.dp,
+                    top = rowTopInset,
+                    bottom = rowBottomInset,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (isMessageSelectionMode) {
