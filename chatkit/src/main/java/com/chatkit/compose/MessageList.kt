@@ -1391,7 +1391,6 @@ private fun MessageReplyQuote(
     modifier: Modifier = Modifier,
 ) {
     val thumbnailAttachment = attachment?.takeIf { it.isImage || it.isVideo }
-    val showsThumbnail = thumbnailAttachment != null
     val previewColor = if (containingMessageIsIncoming) {
         theme.incomingTextColor.copy(alpha = 0.88f)
     } else {
@@ -1434,7 +1433,9 @@ private fun MessageReplyQuote(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = if (compact) 7.dp else 10.dp)
-                .padding(end = if (showsThumbnail) 0.dp else if (compact) 7.dp else 10.dp)
+                // Keep trailing inset for image/video thumbs so they don’t sit flush
+                // against the quote bubble’s right edge.
+                .padding(end = if (compact) 7.dp else 10.dp)
                 .padding(vertical = if (compact) 5.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
