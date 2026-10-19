@@ -675,9 +675,11 @@ public fun ChatView(
                     onMessageRetry = onMessageRetry,
                     onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
                         { message ->
-                            if (message.isDeletedPlaceholder()) return@let
-                            replyingTo = message
-                            onReplyToMessage(message)
+                            // Tombstones stay selectable for local delete, but not reply targets.
+                            if (!message.isDeletedPlaceholder()) {
+                                replyingTo = message
+                                onReplyToMessage(message)
+                            }
                         }
                     } else {
                         null

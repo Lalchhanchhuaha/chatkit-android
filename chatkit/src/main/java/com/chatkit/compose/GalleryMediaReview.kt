@@ -1,10 +1,7 @@
 package com.chatkit.compose
 
 import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.util.Size
-import android.os.Build
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
@@ -467,16 +464,6 @@ private fun GalleryStripThumb(
                 contentScale = ContentScale.Crop,
             )
         }
-        if (item.mediaType == MediaType.Video) {
-            Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier
-                    .size(22.dp)
-                    .align(Alignment.Center),
-            )
-        }
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -507,22 +494,12 @@ private fun loadGalleryThumb(
 ): Bitmap? = runCatching {
     when (item.mediaType) {
         MediaType.Photo -> decodeBitmapRespectingExif(context, item.localUri, maxSide = 256)
-        MediaType.Video -> {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                context.contentResolver.loadThumbnail(
-                    item.localUri,
-                    Size(256, 256),
-                    null,
-                )
-            } else {
-                val retriever = MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(context, item.localUri)
-                    retriever.frameAtTime
-                } finally {
-                    runCatching { retriever.release() }
-                }
-            }
-        }
+        // Photo Picker video URIs often reject ContentResolver.loadThumbnail.
+        // Frame decode via MediaMetadataRetriever works with the temporary grant.
+        MediaType.Video -> decodeVideoFrameRespectingRotation(
+            context = context,
+            uri = item.localUri,
+            maxSide = 256,
+        )
     }
 }.getOrNull()

@@ -62,6 +62,7 @@ class ChatModelsTest {
         val document = ChatAttachment("doc", "notes.pdf", "application/pdf")
         val video = ChatAttachment("video", "clip.mp4", "video/mp4")
         val image = ChatAttachment("image", "photo.jpg", "image/jpeg")
+        val voice = ChatAttachment("voice", "audio.m4a", "audio/mp4")
         val message = ChatMessage(
             id = "source",
             text = "",
@@ -70,8 +71,19 @@ class ChatModelsTest {
             attachments = listOf(document, video, image),
         )
         assertEquals(image, message.replyPreviewAttachment())
-        assertEquals("photo.jpg", message.replyPreviewText())
+        assertEquals("Image", message.replyPreviewText())
+        assertEquals("Video", message.copy(attachments = listOf(video)).replyPreviewText())
+        assertEquals("Voice Message", message.copy(attachments = listOf(voice)).replyPreviewText())
+        assertEquals("notes.pdf", message.copy(attachments = listOf(document)).replyPreviewText())
         assertEquals("Hello", message.copy(text = "  Hello  ").replyPreviewText())
+        assertEquals(
+            "Image",
+            replyQuoteDisplayText(storedText = "photo.jpg", attachment = image),
+        )
+        assertEquals(
+            "Caption",
+            replyQuoteDisplayText(storedText = "Caption", attachment = image),
+        )
     }
 
     @Test

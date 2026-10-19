@@ -5,8 +5,6 @@ import android.app.Activity
 import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.media.MediaActionSound
 import android.net.Uri
 import android.provider.Settings
 import android.graphics.Rect as AndroidRect
@@ -402,10 +400,6 @@ private fun LiveCameraScreen(
     var activeRecording by remember { mutableStateOf<Recording?>(null) }
     var rebinding by remember { mutableStateOf(false) }
     var captureInFlight by remember { mutableStateOf(false) }
-    // Phone-camera shutter feel: freeze the viewfinder + flash the instant the user taps.
-    var frozenPreview by remember { mutableStateOf<Bitmap?>(null) }
-    var showShutterFlash by remember { mutableStateOf(false) }
-    val shutterSound = remember { MediaActionSound().also { it.load(MediaActionSound.SHUTTER_CLICK) } }
     var torchSupported by remember { mutableStateOf(false) }
     var minZoom by remember { mutableFloatStateOf(1f) }
     var maxZoom by remember { mutableFloatStateOf(1f) }
@@ -600,9 +594,6 @@ private fun LiveCameraScreen(
             runCatching { cameraProvider?.unbindAll() }
             cameraProvider = null
             cameraExecutor.shutdown()
-            runCatching { shutterSound.release() }
-            frozenPreview?.takeIf { !it.isRecycled }?.recycle()
-            frozenPreview = null
         }
     }
 
@@ -714,22 +705,6 @@ private fun LiveCameraScreen(
                     .fillMaxSize()
                     .semantics { contentDescription = "Camera viewfinder" },
             )
-            // Stock camera apps freeze the last frame while the JPEG is written.
-            frozenPreview?.let { frame ->
-                Image(
-                    bitmap = frame.asImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            if (showShutterFlash) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.White.copy(alpha = 0.88f)),
-                )
-            }
         }
 
         Box(
@@ -826,16 +801,6 @@ private fun LiveCameraScreen(
                         CaptureMode.PHOTO -> {
                             val capture = imageCapture ?: return@ShutterButton
                             captureInFlight = true
-                            // Match stock Camera: freeze + flash + click happen on the tap,
-                            // before JPEG write / aspect normalize finish.
-                            frozenPreview?.takeIf { !it.isRecycled }?.recycle()
-                            frozenPreview = runCatching { previewView?.bitmap }.getOrNull()
-                            showShutterFlash = true
-                            runCatching { shutterSound.play(MediaActionSound.SHUTTER_CLICK) }
-                            scope.launch {
-                                delay(70)
-                                showShutterFlash = false
-                            }
                             val (id, file) = ChatCameraFiles.photoFile(context.cacheDir)
                             val options = ImageCapture.OutputFileOptions.Builder(file).build()
                             if (viewModel.flashEnabled && torchSupported) {
@@ -850,26 +815,17 @@ private fun LiveCameraScreen(
                                     override fun onImageSaved(
                                         outputFileResults: ImageCapture.OutputFileResults,
                                     ) {
-                                        // Crop/re-encode off the shutter path size: full-res
-                                        // normalize blocked review for 1–2s on high-MP sensors.
-                                        scope.launch(Dispatchers.IO) {
-                                            ChatCameraFiles.normalizePhotoToCaptureAspect(
-                                                context,
-                                                file,
-                                            )
-                                            withContext(Dispatchers.Main) {
-                                                viewModel.onPhotoCaptured(id, file)
-                                                runCatching { cameraProvider?.unbindAll() }
-                                            }
+                                        // Open review immediately; 3:4 normalize continues in
+                                        // the background so the captured still appears ASAP.
+                                        scope.launch(Dispatchers.Main) {
+                                            viewModel.onPhotoCaptured(id, file)
+                                            runCatching { cameraProvider?.unbindAll() }
                                         }
                                     }
 
                                     override fun onError(exception: ImageCaptureException) {
                                         ChatCameraFiles.deleteQuietly(file)
                                         scope.launch(Dispatchers.Main) {
-                                            frozenPreview?.takeIf { !it.isRecycled }?.recycle()
-                                            frozenPreview = null
-                                            showShutterFlash = false
                                             captureInFlight = false
                                         }
                                     }
@@ -992,13 +948,15 @@ private fun ReviewScreen(
         null,
         capture.localFile,
         cropRevision,
+        viewModel.reviewMediaRevision,
     ) {
         value = if (capture.mediaType == MediaType.Photo) {
             withContext(Dispatchers.IO) {
+                // Keep decode modest so the first review frame lands quickly.
                 decodeBitmapRespectingExif(
                     context,
                     capture.localFile.toUri(),
-                    maxSide = 4096,
+                    maxSide = 2048,
                 )
             }
         } else {

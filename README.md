@@ -40,11 +40,11 @@ Then add the library module dependency:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.38")
+    implementation("com.github.Lalchhanchhuaha:chatkit-android:v1.6.39")
 }
 ```
 
-For development snapshots, replace `v1.6.38` with `main-SNAPSHOT`. Tagged versions are recommended
+For development snapshots, replace `v1.6.39` with `main-SNAPSHOT`. Tagged versions are recommended
 for production because they are immutable after JitPack builds them.
 
 ## Add the source module
@@ -134,13 +134,14 @@ For edge-to-edge hosts, use `android:windowSoftInputMode="adjustResize"`.
 ./gradlew :chatkit:publishReleasePublicationToMavenLocal
 ```
 
-Local Maven coordinates: `com.chatkit:chatkit:1.6.38`. Minimum Android version: API 24; `java.time` is
+Local Maven coordinates: `com.chatkit:chatkit:1.6.39`. Minimum Android version: API 24; `java.time` is
 supported through core-library desugaring.
 
 ## Releases
 
 | Version | Notes |
 |---------|--------|
+| 1.6.39 | Instant camera review (no flash); gallery video chip thumbs; tap reply quote to scroll; reply labels Image/Video/Voice Message |
 | 1.6.38 | Faster camera shutter (freeze/flash/click); deletable delete-for-everyone bubbles; gallery review 9:16 chips + X remove + playable video |
 | 1.6.37 | Swallow missing FileProvider/cache decode errors so reply thumbs and stale localUri never crash the host |
 | 1.6.36 | Gate older-history loads with hasMore/isLoading; in-list spinner; gray reply-quote self bar (iOS) |

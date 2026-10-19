@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -64,8 +65,13 @@ internal class ChatCameraViewModel(
     var submitInFlight: Boolean by mutableStateOf(false)
         private set
 
+    /** Bumped after background 3:4 normalize so review reloads the cropped still. */
+    var reviewMediaRevision by mutableIntStateOf(0)
+        private set
+
     private var abandonedFiles = mutableListOf<File>()
     private var videoProcessingJob: Job? = null
+    private var photoNormalizeJob: Job? = null
 
     init {
         if (!allowsVideo && captureMode == CaptureMode.VIDEO) {
@@ -169,6 +175,7 @@ internal class ChatCameraViewModel(
     }
 
     fun onPhotoCaptured(id: String, file: File) {
+        photoNormalizeJob?.cancel()
         enterReview(
             CapturedMedia(
                 id = id,
@@ -178,6 +185,14 @@ internal class ChatCameraViewModel(
                 caption = "",
             ),
         )
+        // Normalize after review is visible so shutter → preview stays snappy.
+        photoNormalizeJob = viewModelScope.launch(Dispatchers.IO) {
+            ChatCameraFiles.normalizePhotoToCaptureAspect(getApplication(), file)
+            ensureActive()
+            withContext(Dispatchers.Main) {
+                reviewMediaRevision += 1
+            }
+        }
     }
 
     fun onVideoCaptured(id: String, file: File) {
@@ -218,6 +233,8 @@ internal class ChatCameraViewModel(
     }
 
     fun retake() {
+        photoNormalizeJob?.cancel()
+        photoNormalizeJob = null
         val reviewing = cameraState as? ChatCameraState.Reviewing
         reviewing?.let {
             ChatCameraFiles.deleteQuietly(it.capture.localFile)
@@ -234,6 +251,8 @@ internal class ChatCameraViewModel(
     fun cancelAndCleanup() {
         videoProcessingJob?.cancel()
         videoProcessingJob = null
+        photoNormalizeJob?.cancel()
+        photoNormalizeJob = null
         when (val state = cameraState) {
             is ChatCameraState.Reviewing -> ChatCameraFiles.deleteQuietly(state.capture.localFile)
             else -> Unit
@@ -260,7 +279,12 @@ internal class ChatCameraViewModel(
 
         val capture = reviewing.capture.copy(caption = caption.trim())
         if (capture.mediaType != MediaType.Video) {
-            finishSubmitWithoutDeleting(capture, onReady)
+            viewModelScope.launch {
+                // Wait for background crop so send uses the final 3:4 JPEG.
+                photoNormalizeJob?.join()
+                photoNormalizeJob = null
+                finishSubmitWithoutDeleting(capture, onReady)
+            }
             return true
         }
 

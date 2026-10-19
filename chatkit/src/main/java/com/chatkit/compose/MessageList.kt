@@ -89,7 +89,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -354,6 +356,26 @@ internal fun MessageList(
         }
     }
 
+    // iOS: tapping a reply quote jumps to the original message in the transcript.
+    var scrollToReplyMessageId by remember { mutableStateOf<String?>(null) }
+    var highlightedReplyMessageId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(scrollToReplyMessageId, invertedItems, isTyping) {
+        val targetId = scrollToReplyMessageId ?: return@LaunchedEffect
+        scrollToReplyMessageId = null
+        val invertedIndex = invertedItems.indexOfFirst {
+            it is TranscriptItem.Message && it.message.id == targetId
+        }
+        if (invertedIndex < 0) return@LaunchedEffect
+        // Typing row occupies list index 0 when present (see LazyColumn below).
+        val listIndex = invertedIndex + if (isTyping) 1 else 0
+        listState.animateScrollToItem(listIndex)
+        highlightedReplyMessageId = targetId
+        delay(1_200)
+        if (highlightedReplyMessageId == targetId) {
+            highlightedReplyMessageId = null
+        }
+    }
+
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
@@ -413,8 +435,14 @@ internal fun MessageList(
                             }?.let { reply ->
                                 { reply(item.message) }
                             },
+                            onReplyQuoteTap = item.message.replyToMessageId
+                                ?.takeUnless { isMessageSelectionMode }
+                                ?.let { targetId ->
+                                    { scrollToReplyMessageId = targetId }
+                                },
                             isMessageSelectionMode = isMessageSelectionMode,
                             isSelected = item.message.id in selectedMessageIds,
+                            isReplyJumpHighlighted = item.message.id == highlightedReplyMessageId,
                             onLongPress = onMessageLongPress?.let { callback ->
                                 { callback(item.message) }
                             },
@@ -604,8 +632,10 @@ internal fun MessageBubble(
     theme: ChatTheme,
     onRetry: () -> Unit,
     onReply: (() -> Unit)?,
+    onReplyQuoteTap: (() -> Unit)? = null,
     isMessageSelectionMode: Boolean,
     isSelected: Boolean,
+    isReplyJumpHighlighted: Boolean = false,
     onLongPress: (() -> Unit)?,
     onSelectionTap: () -> Unit,
     attachmentContent: (@Composable (ChatAttachment) -> Unit)?,
@@ -813,7 +843,12 @@ internal fun MessageBubble(
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(if (isSelected) theme.accentColor.copy(alpha = 0.12f) else Color.Transparent)
+                .background(
+                    when {
+                        isSelected || isReplyJumpHighlighted -> theme.accentColor.copy(alpha = 0.12f)
+                        else -> Color.Transparent
+                    },
+                )
                 .offset { IntOffset(swipeOffset.roundToInt(), 0) }
                 .then(swipeModifier)
                 .then(rowGestureModifier)
@@ -876,10 +911,10 @@ internal fun MessageBubble(
                         MessageReplyQuote(
                             senderName = message.replyToSenderName?.takeIf(String::isNotBlank)
                                 ?: if (replyWasIncoming) "Contact" else "You",
-                            previewText = message.replyToMessageText
-                                ?.takeIf(String::isNotBlank)
-                                ?: message.replyToAttachment?.fileName
-                                ?: "Message",
+                            previewText = replyQuoteDisplayText(
+                                storedText = message.replyToMessageText,
+                                attachment = message.replyToAttachment,
+                            ),
                             wasIncoming = replyWasIncoming,
                             attachment = message.replyToAttachment,
                             containingMessageIsIncoming = incoming,
@@ -887,6 +922,7 @@ internal fun MessageBubble(
                                 message.attachments.none { it.isImage || it.isVideo },
                             theme = theme,
                             attachmentResolver = attachmentResolver,
+                            onClick = onReplyQuoteTap,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = if (hasMediaAttachments) 6.dp else 8.dp)
@@ -1351,6 +1387,7 @@ private fun MessageReplyQuote(
     compact: Boolean,
     theme: ChatTheme,
     attachmentResolver: AttachmentResolver,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val thumbnailAttachment = attachment?.takeIf { it.isImage || it.isVideo }
@@ -1372,7 +1409,19 @@ private fun MessageReplyQuote(
                 },
                 shape,
             )
-            .clip(shape),
+            .clip(shape)
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .clickable(onClick = onClick)
+                        .semantics {
+                            role = Role.Button
+                            contentDescription = "Jump to original message"
+                        }
+                } else {
+                    Modifier
+                },
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -1394,9 +1443,16 @@ private fun MessageReplyQuote(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
             ) {
+                // iOS ChatKit 2.2.21: self-quote "You" uses outgoing text (white) on sent
+                // bubbles; composer banner still uses replyQuoteSelfSenderColor.
+                val senderColor = if (!wasIncoming && !containingMessageIsIncoming) {
+                    theme.outgoingTextColor
+                } else {
+                    theme.replyQuoteSenderColor(wasIncoming)
+                }
                 Text(
                     text = senderName,
-                    color = theme.replyQuoteSenderColor(wasIncoming),
+                    color = senderColor,
                     fontSize = if (compact) 12.sp else 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,

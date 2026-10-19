@@ -35,12 +35,43 @@ public data class ChatMessage(
 internal fun ChatMessage.replyPreviewAttachment(): ChatAttachment? =
     attachments.firstOrNull(ChatAttachment::isImage)
         ?: attachments.firstOrNull(ChatAttachment::isVideo)
+        ?: attachments.firstOrNull(ChatAttachment::isAudio)
         ?: attachments.firstOrNull()
+
+/** iOS-style media reply labels instead of raw file names. */
+internal fun ChatAttachment.replyMediaLabel(): String? = when {
+    isImage -> "Image"
+    isVideo -> "Video"
+    isAudio -> "Voice Message"
+    else -> null
+}
 
 internal fun ChatMessage.replyPreviewText(): String {
     val body = text.trim()
     if (body.isNotEmpty()) return body
-    return replyPreviewAttachment()?.fileName?.takeIf(String::isNotBlank) ?: "Attachment"
+    val attachment = replyPreviewAttachment() ?: return "Attachment"
+    return attachment.replyMediaLabel()
+        ?: attachment.fileName.takeIf(String::isNotBlank)
+        ?: "Attachment"
+}
+
+/**
+ * Display text for an in-bubble reply quote. Media replies show Image / Video /
+ * Voice Message even when older rows stored a file name in [storedText].
+ */
+internal fun replyQuoteDisplayText(
+    storedText: String?,
+    attachment: ChatAttachment?,
+): String {
+    val body = storedText?.trim().orEmpty()
+    val mediaLabel = attachment?.replyMediaLabel()
+    if (mediaLabel != null) {
+        if (body.isEmpty() || body.equals(attachment.fileName, ignoreCase = true)) {
+            return mediaLabel
+        }
+    }
+    if (body.isNotEmpty()) return body
+    return attachment?.fileName?.takeIf(String::isNotBlank) ?: "Message"
 }
 
 /** Direction of a message relative to the current user. */
