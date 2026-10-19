@@ -146,6 +146,8 @@ internal fun MessageList(
     onMessageLongPress: ((ChatMessage) -> Unit)?,
     onMessageSelectionTap: (ChatMessage) -> Unit,
     onLoadPreviousMessages: (() -> Unit)?,
+    hasMoreOlderMessages: Boolean = true,
+    isLoadingOlderMessages: Boolean = false,
     olderMessagesPageSize: Int,
     loadPreviousThreshold: Int,
     onUnreadIncomingCountChanged: (Int) -> Unit,
@@ -197,9 +199,14 @@ internal fun MessageList(
         messageSnapshot.size,
         olderMessagesPageSize,
         loadPreviousThreshold,
+        hasMoreOlderMessages,
+        isLoadingOlderMessages,
     ) {
         val oldestId = messageSnapshot.firstOrNull()?.id ?: return@LaunchedEffect
+        // Match iOS: only request when host says more history exists and none is in flight.
         if (currentLoadPreviousMessages == null ||
+            !hasMoreOlderMessages ||
+            isLoadingOlderMessages ||
             messageSnapshot.size < olderMessagesPageSize ||
             requestedForOldestId == oldestId
         ) return@LaunchedEffect
@@ -1370,7 +1377,7 @@ private fun MessageReplyQuote(
             Modifier
                 .width(if (compact) 3.5.dp else 5.dp)
                 .fillMaxHeight()
-                .background(theme.replyQuoteSenderColor(wasIncoming)),
+                .background(theme.replyQuoteBarColor(wasIncoming)),
         )
         Row(
             modifier = Modifier

@@ -70,8 +70,10 @@ public data class ChatColors(
     public val typingIndicatorContent: Color,
     public val composerButtonBackground: Color = Color(0xFFEFF3F6),
     public val composerIcon: Color = Color(0xFF5F7186),
-    /** Left bar + sender label when a reply quote references the current user's own message. */
+    /** Sender label when a reply quote references the current user's own message. */
     public val replyQuoteSelfSender: Color = accent,
+    /** Left bar when a reply quote references the current user's own message (iOS gray). */
+    public val replyQuoteSelfBar: Color = Color(0xFF9E9E9E),
 )
 
 /** Layout dimensions for message bubbles. */
@@ -117,6 +119,10 @@ public fun ChatScreen(
     onEditMessage: ((messageId: String, text: String) -> Unit)? = null,
     onDeleteMessage: ((messageId: String) -> Unit)? = null,
     onLoadPreviousMessages: (() -> Unit)? = null,
+    /** iOS ChatKit `hasMoreOlderMessages` — gates edge-triggered older-history loads. */
+    hasMoreOlderMessages: Boolean = true,
+    /** iOS ChatKit `isLoadingOlderMessages` — spinner + suppresses duplicate requests. */
+    isLoadingOlderMessages: Boolean = false,
     onReplyToMessage: (ChatMessage) -> Unit = {},
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
     /** Stable channel/conversation ID. Changing it resets transient UI and scrolls to the newest message. */
@@ -159,6 +165,8 @@ public fun ChatScreen(
         onEditMessage = onEditMessage,
         onDeleteMessage = onDeleteMessage,
         onLoadPreviousMessages = onLoadPreviousMessages,
+        hasMoreOlderMessages = hasMoreOlderMessages,
+        isLoadingOlderMessages = isLoadingOlderMessages,
         olderMessagesPageSize = config.olderMessagesPageSize.coerceAtLeast(1),
         loadPreviousThreshold = config.loadPreviousThreshold.coerceAtLeast(1),
         swipeToReplyEnabled = config.enableSwipeToReply,
@@ -177,7 +185,7 @@ private fun ChatTheme.toColors(): ChatColors = ChatColors(
     dateSeparatorTextColor, attachmentPanelBackgroundColor, attachmentTileBackgroundColor,
     thumbnailPlaceholderBackgroundColor, incomingBubbleBorderColor, readReceiptColor,
     typingIndicatorBubbleColor, typingIndicatorTextColor, composerButtonBackgroundColor,
-    composerIconColor, replyQuoteSelfSenderColor,
+    composerIconColor, replyQuoteSelfSenderColor, replyQuoteSelfBarColor,
 )
 
 private fun ChatColors.toTheme(dimensions: ChatDimensions, showDeliveryStatus: Boolean): ChatTheme =
@@ -206,6 +214,7 @@ private fun ChatColors.toTheme(dimensions: ChatDimensions, showDeliveryStatus: B
         composerButtonBackgroundColor = composerButtonBackground,
         composerIconColor = composerIcon,
         replyQuoteSelfSenderColor = replyQuoteSelfSender,
+        replyQuoteSelfBarColor = replyQuoteSelfBar,
         bubbleCornerRadius = dimensions.bubbleCornerRadius,
         messageMaximumWidth = dimensions.maximumBubbleWidth,
         showsDeliveryStatus = showDeliveryStatus,

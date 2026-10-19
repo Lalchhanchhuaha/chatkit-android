@@ -123,6 +123,8 @@ public fun ChatScreen(
                 } else {
                     null
                 },
+                hasMoreOlderMessages = state.canLoadPreviousMessages,
+                isLoadingOlderMessages = state.isLoadingPreviousMessages,
                 deliveryStatusContent = deliveryStatusContent,
                 conversationId = state.conversationId,
             )
@@ -136,12 +138,7 @@ public fun ChatScreen(
                     modifier = Modifier.align(Alignment.Center),
                 )
             }
-
-            if (state.isLoadingPreviousMessages) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
-                )
-            }
+            // Older-history spinner lives inside ChatView (isLoadingOlderMessages).
         }
     }
 }

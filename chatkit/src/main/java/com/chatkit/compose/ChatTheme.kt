@@ -36,8 +36,14 @@ public data class ChatTheme(
     val composerIconColor: Color = Color(0xFF5F7186),
     /** Sender color when a reply quote references the current user's own message. */
     val replyQuoteSelfSenderColor: Color = accentColor,
+    /** Left bar when a reply quote references the current user's own message (iOS gray bar). */
+    val replyQuoteSelfBarColor: Color = Color(0xFF9E9E9E),
 )
 
 /** Matches iOS ChatTheme.replyQuoteSenderColor(wasIncoming:). */
 internal fun ChatTheme.replyQuoteSenderColor(wasIncoming: Boolean): Color =
     if (wasIncoming) accentColor else replyQuoteSelfSenderColor
+
+/** Matches iOS ChatTheme.replyQuoteBarColor(wasIncoming:). */
+internal fun ChatTheme.replyQuoteBarColor(wasIncoming: Boolean): Color =
+    if (wasIncoming) accentColor else replyQuoteSelfBarColor

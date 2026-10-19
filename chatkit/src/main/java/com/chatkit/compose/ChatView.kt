@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Reply
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -150,6 +151,8 @@ public fun ChatView(
     onEditMessage: ((String, String) -> Unit)? = null,
     onDeleteMessage: ((String) -> Unit)? = null,
     onLoadPreviousMessages: (() -> Unit)? = null,
+    hasMoreOlderMessages: Boolean = true,
+    isLoadingOlderMessages: Boolean = false,
     loadPreviousThreshold: Int = 1,
     olderMessagesPageSize: Int = 50,
     swipeToReplyEnabled: Boolean = true,
@@ -656,59 +659,74 @@ public fun ChatView(
             .background(theme.backgroundColor),
     ) {
         Column(Modifier.fillMaxSize()) {
-            MessageList(
-                messages = displayedMessages,
-                conversationId = conversationId,
-                listState = listState,
-                showsSender = showsSender,
-                theme = theme,
-                isViewingNewest = isViewingNewest,
-                unreadIncomingCount = unreadIncomingCount,
-                onTranscriptTap = ::dismissInputPanels,
-                onMessageRetry = onMessageRetry,
-                onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
-                    { message ->
-                        replyingTo = message
-                        onReplyToMessage(message)
-                    }
-                } else {
-                    null
-                },
-                isMessageSelectionMode = isMessageSelectionMode,
-                selectedMessageIds = selectedMessageIds,
-                onMessageLongPress = if (
-                    (swipeToReplyEnabled && showsComposer) ||
-                        onEditMessage != null || onDeleteMessage != null
-                ) {
-                    ::beginMessageSelection
-                } else {
-                    null
-                },
-                onMessageSelectionTap = ::toggleMessageSelection,
-                onLoadPreviousMessages = onLoadPreviousMessages,
-                olderMessagesPageSize = olderMessagesPageSize,
-                loadPreviousThreshold = loadPreviousThreshold,
-                onUnreadIncomingCountChanged = { unreadIncomingCount = it },
-                onNewestVisibilityChanged = { isNewestVisible ->
-                    isViewingNewest = isNewestVisible
-                    if (isNewestVisible) unreadIncomingCount = 0
-                },
-                scrollToNewestRequest = scrollToNewestRequest,
-                onJumpToNewest = { scrollToNewestRequest += 1 },
-                attachmentContent = attachmentContent,
-                automaticallyLoadsImages = automaticallyLoadsImages,
-                automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
-                attachmentResolver = attachmentResolver,
-                onCancelAttachmentUpload = onCancelAttachmentUpload,
-                onCancelAttachmentDownload = onCancelAttachmentDownload,
-                onRetryAttachmentDownload = onRetryAttachmentDownload,
-                audioPlayer = audioPlayer,
-                deliveryStatusContent = deliveryStatusContent,
-                isTyping = isTyping && isViewingNewest &&
-                    !isEditingMessage && !isMessageSelectionMode,
-                typingIndicatorText = typingIndicatorText,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            )
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                MessageList(
+                    messages = displayedMessages,
+                    conversationId = conversationId,
+                    listState = listState,
+                    showsSender = showsSender,
+                    theme = theme,
+                    isViewingNewest = isViewingNewest,
+                    unreadIncomingCount = unreadIncomingCount,
+                    onTranscriptTap = ::dismissInputPanels,
+                    onMessageRetry = onMessageRetry,
+                    onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
+                        { message ->
+                            replyingTo = message
+                            onReplyToMessage(message)
+                        }
+                    } else {
+                        null
+                    },
+                    isMessageSelectionMode = isMessageSelectionMode,
+                    selectedMessageIds = selectedMessageIds,
+                    onMessageLongPress = if (
+                        (swipeToReplyEnabled && showsComposer) ||
+                            onEditMessage != null || onDeleteMessage != null
+                    ) {
+                        ::beginMessageSelection
+                    } else {
+                        null
+                    },
+                    onMessageSelectionTap = ::toggleMessageSelection,
+                    onLoadPreviousMessages = onLoadPreviousMessages,
+                    hasMoreOlderMessages = hasMoreOlderMessages,
+                    isLoadingOlderMessages = isLoadingOlderMessages,
+                    olderMessagesPageSize = olderMessagesPageSize,
+                    loadPreviousThreshold = loadPreviousThreshold,
+                    onUnreadIncomingCountChanged = { unreadIncomingCount = it },
+                    onNewestVisibilityChanged = { isNewestVisible ->
+                        isViewingNewest = isNewestVisible
+                        if (isNewestVisible) unreadIncomingCount = 0
+                    },
+                    scrollToNewestRequest = scrollToNewestRequest,
+                    onJumpToNewest = { scrollToNewestRequest += 1 },
+                    attachmentContent = attachmentContent,
+                    automaticallyLoadsImages = automaticallyLoadsImages,
+                    automaticallySavesDownloadedMediaToPhotos = automaticallySavesDownloadedMediaToPhotos,
+                    attachmentResolver = attachmentResolver,
+                    onCancelAttachmentUpload = onCancelAttachmentUpload,
+                    onCancelAttachmentDownload = onCancelAttachmentDownload,
+                    onRetryAttachmentDownload = onRetryAttachmentDownload,
+                    audioPlayer = audioPlayer,
+                    deliveryStatusContent = deliveryStatusContent,
+                    isTyping = isTyping && isViewingNewest &&
+                        !isEditingMessage && !isMessageSelectionMode,
+                    typingIndicatorText = typingIndicatorText,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // iOS ChatView: ProgressView overlay while older history loads.
+                if (isLoadingOlderMessages) {
+                    CircularProgressIndicator(
+                        color = theme.accentColor,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 10.dp)
+                            .size(28.dp),
+                    )
+                }
+            }
 
         // Smart VC detail layout: only the natural-height footer receives bottom insets.
         // The weighted transcript yields space as the keyboard or attachment panel grows.
