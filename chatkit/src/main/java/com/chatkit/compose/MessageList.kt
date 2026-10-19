@@ -66,6 +66,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -106,9 +107,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -357,22 +360,28 @@ internal fun MessageList(
     }
 
     // iOS: tapping a reply quote jumps to the original message in the transcript.
-    var scrollToReplyMessageId by remember { mutableStateOf<String?>(null) }
+    val replyJumpScope = rememberCoroutineScope()
     var highlightedReplyMessageId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(scrollToReplyMessageId, invertedItems, isTyping) {
-        val targetId = scrollToReplyMessageId ?: return@LaunchedEffect
-        scrollToReplyMessageId = null
-        val invertedIndex = invertedItems.indexOfFirst {
-            it is TranscriptItem.Message && it.message.id == targetId
-        }
-        if (invertedIndex < 0) return@LaunchedEffect
-        // Typing row occupies list index 0 when present (see LazyColumn below).
-        val listIndex = invertedIndex + if (isTyping) 1 else 0
-        listState.animateScrollToItem(listIndex)
-        highlightedReplyMessageId = targetId
-        delay(1_200)
-        if (highlightedReplyMessageId == targetId) {
-            highlightedReplyMessageId = null
+    val currentInvertedItems by rememberUpdatedState(invertedItems)
+    val replyJumpJob = remember { object { var job: Job? = null } }
+    val jumpToRepliedMessage: (String) -> Unit = remember(listState, replyJumpScope) {
+        { targetId ->
+            val invertedIndex = currentInvertedItems.indexOfFirst {
+                it is TranscriptItem.Message && it.message.id == targetId
+            }
+            if (invertedIndex >= 0) {
+                // Typing row occupies list index 0 when present (see LazyColumn below).
+                val listIndex = invertedIndex + if (currentIsTyping) 1 else 0
+                replyJumpJob.job?.cancel()
+                replyJumpJob.job = replyJumpScope.launch {
+                    listState.animateScrollToItem(listIndex)
+                    highlightedReplyMessageId = targetId
+                    delay(1_200)
+                    if (highlightedReplyMessageId == targetId) {
+                        highlightedReplyMessageId = null
+                    }
+                }
+            }
         }
     }
 
@@ -441,7 +450,7 @@ internal fun MessageList(
                             onReplyQuoteTap = item.message.replyToMessageId
                                 ?.takeUnless { isMessageSelectionMode }
                                 ?.let { targetId ->
-                                    { scrollToReplyMessageId = targetId }
+                                    { jumpToRepliedMessage(targetId) }
                                 },
                             isMessageSelectionMode = isMessageSelectionMode,
                             isSelected = item.message.id in selectedMessageIds,
@@ -914,17 +923,20 @@ internal fun MessageBubble(
                                 Modifier
                             },
                         )
-                        .pointerInput(message.id, isMessageSelectionMode, onReply) {
-                            detectTapGestures(
-                                onTap = {
-                                    if (!isMessageSelectionMode &&
-                                        !incoming && message.deliveryStatus == DeliveryStatus.Failed
-                                    ) {
-                                        onRetry()
-                                    }
-                                },
-                            )
-                        },
+                        // Only attach retry taps when needed — a bubble-wide detectTapGestures
+                        // steals clicks from the reply-quote jump target.
+                        .then(
+                            if (!isMessageSelectionMode &&
+                                !incoming &&
+                                message.deliveryStatus == DeliveryStatus.Failed
+                            ) {
+                                Modifier.pointerInput(message.id) {
+                                    detectTapGestures(onTap = { onRetry() })
+                                }
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     val hasMediaAttachments = message.attachments.any {
                         it.isImage || it.isVideo || it.isAudio
@@ -1433,14 +1445,19 @@ private fun MessageReplyQuote(
                 shape,
             )
             .clip(shape)
+            .semantics {
+                if (onClick != null) {
+                    role = Role.Button
+                    contentDescription = "Jump to original message"
+                }
+            }
             .then(
                 if (onClick != null) {
-                    Modifier
-                        .clickable(onClick = onClick)
-                        .semantics {
-                            role = Role.Button
-                            contentDescription = "Jump to original message"
-                        }
+                    // Prefer pointerInput so the quote wins the gesture arena against
+                    // the transcript/row long-press detectors.
+                    Modifier.pointerInput(onClick) {
+                        detectTapGestures(onTap = { onClick() })
+                    }
                 } else {
                     Modifier
                 },
@@ -1468,9 +1485,9 @@ private fun MessageReplyQuote(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
             ) {
-                // iOS ChatKit 2.2.21: self-quote "You" uses outgoing text (white) on sent
-                // bubbles; composer banner still uses replyQuoteSelfSenderColor.
-                val senderColor = if (!wasIncoming && !containingMessageIsIncoming) {
+                // On sent bubbles, quote sender names stay white (self or contact).
+                // Incoming bubbles / composer banner still use replyQuoteSenderColor.
+                val senderColor = if (!containingMessageIsIncoming) {
                     theme.outgoingTextColor
                 } else {
                     theme.replyQuoteSenderColor(wasIncoming)
