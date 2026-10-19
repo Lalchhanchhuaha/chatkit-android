@@ -238,7 +238,9 @@ private fun decodeBitmapWithFactory(
     context: Context,
     uri: Uri,
     maxSide: Int,
-): Bitmap? {
+): Bitmap? = runCatching {
+    // FileProvider / missing cache files throw FileNotFoundException from
+    // openInputStream — never crash the host (reply thumbnails, stale localUri).
     // A valid JPEG may be an MPO container or carry malformed EXIF. Orientation
     // metadata must never prevent BitmapFactory from decoding its first image.
     val orientation = runCatching {
@@ -253,17 +255,17 @@ private fun decodeBitmapWithFactory(
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     context.contentResolver.openInputStream(uri)?.use {
         BitmapFactory.decodeStream(it, null, bounds)
-    }
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    } ?: return@runCatching null
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
     val longest = max(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
     val opts = BitmapFactory.Options().apply {
         inSampleSize = if (maxSide > 0) max(1, longest / maxSide) else 1
     }
     val raw = context.contentResolver.openInputStream(uri)?.use {
         BitmapFactory.decodeStream(it, null, opts)
-    } ?: return null
-    return applyExifOrientation(raw, orientation)
-}
+    } ?: return@runCatching null
+    applyExifOrientation(raw, orientation)
+}.getOrNull()
 
 internal fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
     if (orientation == ExifInterface.ORIENTATION_NORMAL ||

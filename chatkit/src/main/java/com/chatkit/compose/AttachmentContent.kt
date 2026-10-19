@@ -170,12 +170,15 @@ internal fun decodeAndCacheAttachmentPreview(
 ): ImageBitmap? {
     val key = attachmentPreviewCacheKey(uri, preferVideo, maxSide)
     cachedAttachmentPreviewOrNull(uri, preferVideo, maxSide)?.let { return it }
-    val decoded = decodeAttachmentPreview(
-        context = context,
-        uri = uri,
-        preferVideo = preferVideo,
-        maxSide = maxSide,
-    )?.asImageBitmap() ?: return null
+    // Missing FileProvider paths / cleared cache must not crash the host process.
+    val decoded = runCatching {
+        decodeAttachmentPreview(
+            context = context,
+            uri = uri,
+            preferVideo = preferVideo,
+            maxSide = maxSide,
+        )?.asImageBitmap()
+    }.getOrNull() ?: return null
     synchronized(AttachmentPreviewCache) {
         AttachmentPreviewCache.put(key, decoded)
     }

@@ -1491,16 +1491,18 @@ internal fun ReplyAttachmentThumbnail(
     val bitmap by produceState<ImageBitmap?>(null, uri, attachment.isVideo, attachment.posterUri) {
         value = uri?.let { resolved ->
             withContext(Dispatchers.IO) {
-                val useVideoFrame = preferVideoFrame && resolved != attachment.posterUri
-                // Reuse the bubble decode cache (1024px) when the media row already rendered.
-                cachedAttachmentPreviewOrNull(resolved, useVideoFrame, maxSide = 1024)
-                    ?: cachedAttachmentPreviewOrNull(resolved, useVideoFrame, maxSide = 256)
-                    ?: decodeAndCacheAttachmentPreview(
-                        context = context,
-                        uri = resolved,
-                        preferVideo = useVideoFrame,
-                        maxSide = 256,
-                    )
+                runCatching {
+                    val useVideoFrame = preferVideoFrame && resolved != attachment.posterUri
+                    // Reuse the bubble decode cache (1024px) when the media row already rendered.
+                    cachedAttachmentPreviewOrNull(resolved, useVideoFrame, maxSide = 1024)
+                        ?: cachedAttachmentPreviewOrNull(resolved, useVideoFrame, maxSide = 256)
+                        ?: decodeAndCacheAttachmentPreview(
+                            context = context,
+                            uri = resolved,
+                            preferVideo = useVideoFrame,
+                            maxSide = 256,
+                        )
+                }.getOrNull()
             }
         }
     }

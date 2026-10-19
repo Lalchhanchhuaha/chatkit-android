@@ -81,7 +81,7 @@ internal fun measureUprightMediaAspectRatio(file: File, isVideo: Boolean): Float
     }.getOrNull()
 }
 
-private fun measureImageAspectRatio(context: Context, uri: Uri): Float? {
+private fun measureImageAspectRatio(context: Context, uri: Uri): Float? = runCatching {
     val orientation = runCatching {
         context.contentResolver.openInputStream(uri)?.use { stream ->
             ExifInterface(stream).getAttributeInt(
@@ -94,10 +94,10 @@ private fun measureImageAspectRatio(context: Context, uri: Uri): Float? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     context.contentResolver.openInputStream(uri)?.use {
         BitmapFactory.decodeStream(it, null, bounds)
-    }
-    return uprightSizeFromExifBounds(bounds.outWidth, bounds.outHeight, orientation)
+    } ?: return@runCatching null
+    uprightSizeFromExifBounds(bounds.outWidth, bounds.outHeight, orientation)
         ?.let { (w, h) -> aspectRatioFromSize(w, h) }
-}
+}.getOrNull()
 
 private fun measureImageAspectRatio(file: File): Float? {
     val orientation = runCatching {
