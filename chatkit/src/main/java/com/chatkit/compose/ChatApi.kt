@@ -124,6 +124,7 @@ public fun ChatScreen(
     /** iOS ChatKit `isLoadingOlderMessages` — spinner + suppresses duplicate requests. */
     isLoadingOlderMessages: Boolean = false,
     onReplyToMessage: (ChatMessage) -> Unit = {},
+    onCallLogTap: ((ChatMessage) -> Unit)? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
     /** Stable channel/conversation ID. Changing it resets transient UI and scrolls to the newest message. */
     conversationId: String? = null,
@@ -171,6 +172,7 @@ public fun ChatScreen(
         loadPreviousThreshold = config.loadPreviousThreshold.coerceAtLeast(1),
         swipeToReplyEnabled = config.enableSwipeToReply,
         onReplyToMessage = onReplyToMessage,
+        onCallLogTap = onCallLogTap,
         onSubmit = onSubmit,
         onSend = onSendText,
         deliveryStatusContent = deliveryStatusContent,

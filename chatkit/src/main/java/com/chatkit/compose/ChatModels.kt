@@ -6,6 +6,15 @@ import androidx.core.net.toUri
 import java.io.File
 import java.time.Instant
 
+/** WhatsApp-style call-log metadata rendered as a dedicated call bubble (iOS ChatKit 2.2.82). */
+@Immutable
+public data class ChatCallLogInfo(
+    public val title: String,
+    public val detail: String? = null,
+    public val isVideo: Boolean = true,
+    public val isAlert: Boolean = false,
+)
+
 /** Immutable message supplied by the host, ordered oldest to newest. */
 @Immutable
 public data class ChatMessage(
@@ -24,6 +33,8 @@ public data class ChatMessage(
     public val replyToWasIncoming: Boolean? = null,
     /** Optional attachment snapshot used for the reply quote icon and thumbnail. */
     public val replyToAttachment: ChatAttachment? = null,
+    /** Non-null when this row represents a call log bubble rather than a regular message. */
+    public val callLog: ChatCallLogInfo? = null,
 ) {
     /** True when this row should use the incoming bubble treatment. */
     public val isIncoming: Boolean get() = direction == MessageDirection.Incoming
@@ -239,7 +250,8 @@ internal fun ChatMessage.isDeletedPlaceholder(): Boolean =
     text.contains("was deleted", ignoreCase = true)
 
 internal fun ChatMessage.canEdit(now: Instant, windowMillis: Long): Boolean =
-    !isDeletedPlaceholder() &&
+    callLog == null &&
+        !isDeletedPlaceholder() &&
         direction == MessageDirection.Outgoing && text.isNotBlank() && windowMillis >= 0 &&
         timestamp.plusMillis(windowMillis).isAfter(now)
 

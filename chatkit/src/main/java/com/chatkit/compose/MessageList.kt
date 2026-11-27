@@ -49,6 +49,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Description
@@ -167,6 +168,7 @@ internal fun MessageList(
     onCancelAttachmentDownload: (ChatAttachment) -> Unit = {},
     onRetryAttachmentDownload: (ChatAttachment) -> Unit = {},
     audioPlayer: AudioPlayerController? = null,
+    onCallLogTap: ((ChatMessage) -> Unit)? = null,
     deliveryStatusContent: (@Composable (status: DeliveryStatus, onRetry: () -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -443,7 +445,7 @@ internal fun MessageList(
                             theme = theme,
                             onRetry = { onMessageRetry(item.message.id) },
                             onReply = onReplyMessage?.takeUnless {
-                                item.message.isDeletedPlaceholder()
+                                item.message.isDeletedPlaceholder() || item.message.callLog != null
                             }?.let { reply ->
                                 { reply(item.message) }
                             },
@@ -452,6 +454,9 @@ internal fun MessageList(
                                 ?.let { targetId ->
                                     { jumpToRepliedMessage(targetId) }
                                 },
+                            onCallLogTap = onCallLogTap?.takeUnless { isMessageSelectionMode }?.let { tap ->
+                                { tap(item.message) }
+                            },
                             isMessageSelectionMode = isMessageSelectionMode,
                             isSelected = item.message.id in selectedMessageIds,
                             isReplyJumpHighlighted = item.message.id == highlightedReplyMessageId,
@@ -661,6 +666,7 @@ internal fun MessageBubble(
     onRetry: () -> Unit,
     onReply: (() -> Unit)?,
     onReplyQuoteTap: (() -> Unit)? = null,
+    onCallLogTap: (() -> Unit)? = null,
     isMessageSelectionMode: Boolean,
     isSelected: Boolean,
     isReplyJumpHighlighted: Boolean = false,
@@ -701,7 +707,9 @@ internal fun MessageBubble(
         java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
             .format(java.util.Date(message.timestampMillis))
     }
+    val callLog = message.callLog
     val showsDelivery = !incoming &&
+        callLog == null &&
         theme.showsDeliveryStatus &&
         message.deliveryStatus.displayedDeliveryStatus != DeliveryStatus.None
     val timestampColor = if (incoming) theme.incomingTimestampColor else theme.outgoingTimestampColor
@@ -843,6 +851,7 @@ internal fun MessageBubble(
             null
         }
         val contentBubbleWidth = when {
+            callLog != null -> minOf(maxBubble, 228.dp)
             hasVisualMedia -> maxOf(
                 singleMediaBubbleWidth ?: maxBubble,
                 captionLayout?.bubbleWidth ?: ChatBubbleMetrics.MinimumWidth,
@@ -923,21 +932,33 @@ internal fun MessageBubble(
                                 Modifier
                             },
                         )
-                        // Only attach retry taps when needed — a bubble-wide detectTapGestures
+                        // Only attach retry/call-log taps when needed — a bubble-wide detectTapGestures
                         // steals clicks from the reply-quote jump target.
                         .then(
-                            if (!isMessageSelectionMode &&
-                                !incoming &&
-                                message.deliveryStatus == DeliveryStatus.Failed
-                            ) {
-                                Modifier.pointerInput(message.id) {
-                                    detectTapGestures(onTap = { onRetry() })
-                                }
-                            } else {
-                                Modifier
+                            when {
+                                !isMessageSelectionMode && callLog != null && onCallLogTap != null ->
+                                    Modifier.pointerInput(message.id) {
+                                        detectTapGestures(onTap = { onCallLogTap() })
+                                    }
+                                !isMessageSelectionMode &&
+                                    !incoming &&
+                                    message.deliveryStatus == DeliveryStatus.Failed ->
+                                    Modifier.pointerInput(message.id) {
+                                        detectTapGestures(onTap = { onRetry() })
+                                    }
+                                else -> Modifier
                             },
                         ),
                 ) {
+                    if (callLog != null) {
+                        CallLogBubbleContent(
+                            callLog = callLog,
+                            incoming = incoming,
+                            timeText = timeText,
+                            textColor = textColor,
+                            timestampColor = timestampColor,
+                        )
+                    } else {
                     val hasMediaAttachments = message.attachments.any {
                         it.isImage || it.isVideo || it.isAudio
                     }
@@ -1045,6 +1066,7 @@ internal fun MessageBubble(
                                 deliveryStatusContent = deliveryStatusContent,
                             )
                         }
+                    }
                     }
                 }
             }
@@ -1359,6 +1381,77 @@ private fun MessageTimestampFooter(
                 DeliveryStatus(deliveryStatus, theme, onRetry)
             }
         }
+    }
+}
+
+@Composable
+private fun CallLogBubbleContent(
+    callLog: ChatCallLogInfo,
+    incoming: Boolean,
+    timeText: String,
+    textColor: Color,
+    timestampColor: Color,
+) {
+    val alertRed = Color(0xFFFF3B30)
+    val badgeBg = if (callLog.isAlert) {
+        alertRed.copy(alpha = 0.16f)
+    } else {
+        textColor.copy(alpha = if (incoming) 0.08f else 0.14f)
+    }
+    val iconTint = if (callLog.isAlert) alertRed else textColor
+    val titleColor = if (callLog.isAlert) alertRed else textColor
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 10.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(badgeBg),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (callLog.isVideo) Icons.Filled.Videocam else Icons.Filled.Call,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = callLog.title,
+                    color = titleColor,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = callLog.detail ?: "Tap to call back",
+                    color = timestampColor,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = timeText,
+            color = timestampColor,
+            fontSize = 10.sp,
+            modifier = Modifier.align(Alignment.End),
+        )
     }
 }
 

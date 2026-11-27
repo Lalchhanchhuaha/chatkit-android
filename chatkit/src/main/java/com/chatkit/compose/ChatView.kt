@@ -157,6 +157,7 @@ public fun ChatView(
     olderMessagesPageSize: Int = 50,
     swipeToReplyEnabled: Boolean = true,
     onReplyToMessage: (ChatMessage) -> Unit = {},
+    onCallLogTap: ((ChatMessage) -> Unit)? = null,
     onTyping: () -> Unit = {},
     onSubmit: ((ChatDraft) -> Unit)? = null,
     onSend: (String) -> Unit = {},
@@ -675,8 +676,8 @@ public fun ChatView(
                     onMessageRetry = onMessageRetry,
                     onReplyMessage = if (swipeToReplyEnabled && showsComposer) {
                         { message ->
-                            // Tombstones stay selectable for local delete, but not reply targets.
-                            if (!message.isDeletedPlaceholder()) {
+                            // Tombstones and call logs stay selectable for local delete, not reply targets.
+                            if (!message.isDeletedPlaceholder() && message.callLog == null) {
                                 replyingTo = message
                                 onReplyToMessage(message)
                             }
@@ -684,6 +685,7 @@ public fun ChatView(
                     } else {
                         null
                     },
+                    onCallLogTap = onCallLogTap,
                     isMessageSelectionMode = isMessageSelectionMode,
                     selectedMessageIds = selectedMessageIds,
                     onMessageLongPress = if (
